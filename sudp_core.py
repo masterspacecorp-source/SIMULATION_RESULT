@@ -230,13 +230,27 @@ def expand_month_matrix(df: pd.DataFrame, year:int, month:int):
         return None
     cols = list(df.columns)
     key_col = cols[0]
-    slot_cols = [c for c in cols[1:] if str(c).strip().isdigit() or str(c).replace(".","",1).isdigit()]
-    if not slot_cols:
+    raw_slot_cols = cols[1:]
+    if not raw_slot_cols:
         return None
-    slot_cols = sorted(slot_cols, key=lambda x: int(float(str(x))))
+
+    # 일부 원천 파일(CD_RESULT_CAL 등)은 헤더가 불완전해 첫 슬롯(1) 이름이 깨질 수 있다.
+    # 이 경우 열 이름 숫자 기준으로 슬롯을 잡으면 2시부터 시작하는 오프셋이 생길 수 있으므로,
+    # 기본은 "열 순서"를 슬롯 순서로 사용한다.
+    numeric_slot_cols = [c for c in raw_slot_cols if str(c).strip().isdigit() or str(c).replace(".","",1).isdigit()]
+    use_numeric_header = False
+    if numeric_slot_cols:
+        nums = sorted(int(float(str(c))) for c in numeric_slot_cols)
+        use_numeric_header = (nums == list(range(1, len(nums)+1)) and len(nums) == len(raw_slot_cols))
+
+    slot_cols = sorted(raw_slot_cols, key=lambda x: int(float(str(x)))) if use_numeric_header else list(raw_slot_cols)
+    slot_map = {c: i+1 for i, c in enumerate(slot_cols)}
     nslots = len(slot_cols)
     m = df.melt(id_vars=[key_col], value_vars=slot_cols, var_name="슬롯", value_name="value")
-    m["슬롯"] = m["슬롯"].astype(float).astype(int)
+    if use_numeric_header:
+        m["슬롯"] = m["슬롯"].astype(float).astype(int)
+    else:
+        m["슬롯"] = m["슬롯"].map(slot_map).astype(int)
     y,mn,d,w,h = month_slots_to_calendar(year, month, nslots)
     time_tbl = pd.DataFrame({"슬롯": np.arange(1, len(y)+1), "연도":y, "월":mn, "일":d, "요일":w, "시간":h})
     out = m.merge(time_tbl, on="슬롯", how="left").rename(columns={key_col:"키"})

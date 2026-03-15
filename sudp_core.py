@@ -986,10 +986,23 @@ def run(root: str = None,
     if applied_hhv is None and is_tty:
         applied_hhv = float(input("적용 발열량(HHV, kcal/kg)을 입력하세요 (예: 4500): ").strip())
 
+    # 필수 입력 검증 (noconsole/비대화형 실행 시 None 비교 에러 방지)
+    if start_year is None or end_year is None:
+        raise ValueError(
+            "시작연도/종료연도가 지정되지 않았습니다. "
+            "EXE 실행 시 --start-year, --end-year 옵션을 입력하세요."
+        )
+    ys, ye = sorted([int(start_year), int(end_year)])
+
+    if not codes_csv:
+        raise ValueError(
+            "자원코드가 지정되지 않았습니다. "
+            "EXE 실행 시 --codes 옵션(예: --codes \"2731,2732\")을 입력하세요."
+        )
+
     # 출력 파일 경로 기본값
     if out_path is None:
-        s, e = sorted([start_year, end_year])
-        out_path = f"SUDP_{s}_{e}.xlsx"
+        out_path = f"SUDP_{ys}_{ye}.xlsx"
 
     root = Path(root)
     ys, ye = sorted([start_year, end_year])
@@ -1450,4 +1463,13 @@ def run(root: str = None,
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception as e:
+        msg = f"[오류] {e}"
+        try:
+            Path("sudp_error.log").write_text(msg + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        print(msg)
+        raise SystemExit(1)

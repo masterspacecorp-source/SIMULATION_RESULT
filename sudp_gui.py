@@ -6,14 +6,19 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 # ★ 코어 모듈 (sudp_core.py의 run 함수를 사용)
+# PyInstaller(onefile)에서 sudp_core.exe가 직접 sudp_gui를 로드할 때
+# 모듈명이 __main__으로 올라와 순환 import가 날 수 있어 fallback을 둔다.
 try:
     from sudp_core import run as generate_report
-except Exception as e:
-    raise ImportError(
-        "sudp_core.py에서 run 함수를 import하지 못했습니다. "
-        "코어 스크립트를 sudp_core.py로 저장했는지 확인하세요.\n"
-        f"원인: {e}"
-    )
+except Exception:
+    try:
+        from __main__ import run as generate_report
+    except Exception as e:
+        raise ImportError(
+            "sudp_core.py에서 run 함수를 import하지 못했습니다. "
+            "코어 스크립트를 sudp_core.py로 저장했는지 확인하세요.\n"
+            f"원인: {e}"
+        )
 
 DEFAULT_ROOT = r"C:\Program Files (x86)\MasterSpace\M-Core\SUDP"
 
@@ -231,12 +236,12 @@ class App(tk.Tk):
         # 백그라운드 실행
         t = threading.Thread(
             target=self._run_job,
-            args=(codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name),
+            args=(codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name, self.var_snap_use_default.get()),
             daemon=True
         )
         t.start()
 
-    def _run_job(self, codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name):
+    def _run_job(self, codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name, use_default_snapshot_dir):
         try:
             # sudp_core.run의 최신 시그니처에 맞춰 호출
             generate_report(
@@ -250,6 +255,7 @@ class App(tk.Tk):
                 snapshot_mode=(snapshot_mode or "zip"),
                 snapshot_out=snap_dir,
                 snapshot_name=snapshot_name,
+                use_default_snapshot_dir=use_default_snapshot_dir,
             )
             self._append_log("[완료] 엑셀 생성 성공\n")
             self._set_status("완료! 엑셀 파일이 생성되었습니다.")

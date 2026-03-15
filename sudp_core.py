@@ -230,13 +230,27 @@ def expand_month_matrix(df: pd.DataFrame, year:int, month:int):
         return None
     cols = list(df.columns)
     key_col = cols[0]
-    slot_cols = [c for c in cols[1:] if str(c).strip().isdigit() or str(c).replace(".","",1).isdigit()]
-    if not slot_cols:
+    raw_slot_cols = cols[1:]
+    if not raw_slot_cols:
         return None
-    slot_cols = sorted(slot_cols, key=lambda x: int(float(str(x))))
+
+    # 일부 원천 파일(CD_RESULT_CAL 등)은 헤더가 불완전해 첫 슬롯(1) 이름이 깨질 수 있다.
+    # 이 경우 열 이름 숫자 기준으로 슬롯을 잡으면 2시부터 시작하는 오프셋이 생길 수 있으므로,
+    # 기본은 "열 순서"를 슬롯 순서로 사용한다.
+    numeric_slot_cols = [c for c in raw_slot_cols if str(c).strip().isdigit() or str(c).replace(".","",1).isdigit()]
+    use_numeric_header = False
+    if numeric_slot_cols:
+        nums = sorted(int(float(str(c))) for c in numeric_slot_cols)
+        use_numeric_header = (nums == list(range(1, len(nums)+1)) and len(nums) == len(raw_slot_cols))
+
+    slot_cols = sorted(raw_slot_cols, key=lambda x: int(float(str(x)))) if use_numeric_header else list(raw_slot_cols)
+    slot_map = {c: i+1 for i, c in enumerate(slot_cols)}
     nslots = len(slot_cols)
     m = df.melt(id_vars=[key_col], value_vars=slot_cols, var_name="슬롯", value_name="value")
-    m["슬롯"] = m["슬롯"].astype(float).astype(int)
+    if use_numeric_header:
+        m["슬롯"] = m["슬롯"].astype(float).astype(int)
+    else:
+        m["슬롯"] = m["슬롯"].map(slot_map).astype(int)
     y,mn,d,w,h = month_slots_to_calendar(year, month, nslots)
     time_tbl = pd.DataFrame({"슬롯": np.arange(1, len(y)+1), "연도":y, "월":mn, "일":d, "요일":w, "시간":h})
     out = m.merge(time_tbl, on="슬롯", how="left").rename(columns={key_col:"키"})
@@ -842,9 +856,13 @@ def build_full_hourly_index(ys:int, ye:int) -> pd.DataFrame:
 def run(root: str = None,
         codes_csv: str = None,
         start_year: int = None,
+        start_month: int | None = None,
         end_year: int = None,
+        end_month: int | None = None,
         out_path: str = None,
         reserve_price: float = None,
+        result_mode: str | None = None,
+        applied_hhv: float | None = None,
         # GUI/CLI 스냅샷 인자
         snapshot: bool = False,
         snapshot_mode: str = "zip",           # "zip" | "copy"
@@ -919,13 +937,46 @@ def run(root: str = None,
     if reserve_price is None and is_tty:
         reserve_price = float(input("예비력용량가치 단가를 입력하세요 (예: 1.0): ").strip())
 
+    # 비대화식 실행(예: --noconsole exe)에서 인자가 비어 있으면 GUI로 폴백
+    missing = []
+    if not codes_csv:
+        missing.append("codes_csv(--codes)")
+    if start_year is None:
+        missing.append("start_year(--start-year)")
+    if end_year is None:
+        missing.append("end_year(--end-year)")
+    if reserve_price is None:
+        missing.append("reserve_price(--ru-price)")
+
+    if missing:
+        guide = (
+            "필수 입력이 누락되었습니다: " + ", ".join(missing) + "\n"
+            "해결 방법:\n"
+            "  1) sudp_gui.py를 EXE로 빌드해 GUI에서 입력하거나,\n"
+            "  2) sudp_core.py EXE 실행 시 CLI 인자를 전달하세요.\n"
+            "예시) sudp_core.exe --codes INCC1,INCC2 --start-year 2026 --end-year 2035 --ru-price 1.0"
+        )
+
+        # noconsole + 인자없음 실행을 배려해 GUI 자동 실행
+        if not is_tty:
+            try:
+                from sudp_gui import main as gui_main
+                gui_main()
+                return
+            except Exception:
+                # GUI 폴백에 실패하면 기존처럼 명시적으로 오류를 올린다.
+                raise ValueError(guide)
+
+        # 콘솔 실행인데 값이 비어 있는 경우는 안내와 함께 중단
+        raise ValueError(guide)
+
     # 출력 파일 경로 기본값
     if out_path is None:
-        s, e = sorted([start_year, end_year])
+        s, e = sorted([int(start_year), int(end_year)])
         out_path = f"SUDP_{s}_{e}.xlsx"
 
     root = Path(root)
-    ys, ye = sorted([start_year, end_year])
+    ys, ye = sorted([int(start_year), int(end_year)])
 
     # 스냅샷 저장 폴더 기본값: 결과 엑셀과 같은 폴더
     if not snap_out or use_default_snapshot_dir:

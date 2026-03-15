@@ -1464,6 +1464,15 @@ def run(root: str = None,
 
 if __name__ == "__main__":
     try:
+        # 인자 없이 실행(특히 --noconsole EXE 더블클릭)하면 GUI를 띄운다.
+        if len(sys.argv) == 1:
+            try:
+                from sudp_gui import main as gui_main
+                gui_main()
+                raise SystemExit(0)
+            except Exception:
+                # GUI 로딩 실패 시 기존 CLI 경로로 폴백
+                pass
         run()
     except Exception as e:
         msg = f"[오류] {e}"

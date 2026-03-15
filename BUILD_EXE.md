@@ -1,34 +1,32 @@
-# SUDP 결과 취합기 EXE 빌드 가이드
-
-현재 저장소에는 `sudp_core.py` 1개로 동작하는 실행 스크립트가 있으며,
-Windows에서 아래 방식으로 `exe`를 생성할 수 있습니다.
+# EXE 빌드 가이드 (Windows)
 
 ## 1) 준비
-
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\activate
 python -m pip install --upgrade pip
-python -m pip install pyinstaller pandas numpy openpyxl xlsxwriter
+python -m pip install pyinstaller pandas openpyxl xlsxwriter
 ```
 
-## 2) 빌드
+## 2) GUI EXE 빌드 (권장)
+`sudp_gui.py`를 엔트리포인트로 빌드하면 EXE 실행 시 바로 GUI가 뜹니다.
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --onefile --name sudp_consolidator sudp_core.py
+python -m PyInstaller --clean --onefile --noconsole --name sudp_consolidator sudp_gui.py
 ```
 
-빌드가 완료되면 아래 파일이 생성됩니다.
+결과물: `dist\sudp_consolidator.exe`
 
-- `dist/sudp_consolidator.exe`
-
-## 3) 실행 예시
+## 3) 코어 파일로 빌드해도 GUI 자동 실행
+아래처럼 `sudp_core.py`로 빌드해도, **인자 없이 실행하면 GUI가 자동 실행**되도록 처리했습니다.
 
 ```powershell
-.\dist\sudp_consolidator.exe --root "C:\Program Files (x86)\MasterSpace\M-Core\SUDP" --codes "2731,2732" --start-year 2026 --end-year 2035 --result-mode "시간별" --hhv 5000 --ru-price 0.0 --out "C:\temp\result.xlsx"
+python -m PyInstaller --clean --onefile --noconsole --name sudp_consolidator sudp_core.py
 ```
 
-## 4) 콘솔 창 숨기기(선택)
+## 4) 실행
+- 더블클릭 후 GUI에서 시작연도/종료연도/자원코드/결과형식/HHV 입력
+- 결과 엑셀 생성
 
-GUI로만 쓸 계획이면 `--onefile` 빌드 시 `--noconsole` 옵션을 추가하세요.
-단, 표준출력 로그 확인이 어려워질 수 있습니다.
+## 5) 참고
+- 콘솔 버전으로 직접 실행하려면 `--noconsole` 없이 빌드하고 CLI 인자를 넘기면 됩니다.

@@ -933,13 +933,35 @@ def run(root: str = None,
     if reserve_price is None and is_tty:
         reserve_price = float(input("예비력용량가치 단가를 입력하세요 (예: 1.0): ").strip())
 
+    # 비대화식 실행(예: --noconsole exe)에서 필수 인자 누락 방어
+    missing = []
+    if not codes_csv:
+        missing.append("codes_csv(--codes)")
+    if start_year is None:
+        missing.append("start_year(--start-year)")
+    if end_year is None:
+        missing.append("end_year(--end-year)")
+    if reserve_price is None:
+        missing.append("reserve_price(--ru-price)")
+
+    if missing:
+        guide = (
+            "필수 입력이 누락되었습니다: " + ", ".join(missing) + "\n"
+            "콘솔 없이 실행한 EXE에서는 대화형 입력을 받을 수 없습니다.\n"
+            "해결 방법: \n"
+            "  1) sudp_gui.py를 EXE로 빌드해 GUI에서 입력하거나,\n"
+            "  2) sudp_core.py EXE 실행 시 CLI 인자를 전달하세요.\n"
+            "예시) sudp_core.exe --codes INCC1,INCC2 --start-year 2026 --end-year 2035 --ru-price 1.0"
+        )
+        raise ValueError(guide)
+
     # 출력 파일 경로 기본값
     if out_path is None:
-        s, e = sorted([start_year, end_year])
+        s, e = sorted([int(start_year), int(end_year)])
         out_path = f"SUDP_{s}_{e}.xlsx"
 
     root = Path(root)
-    ys, ye = sorted([start_year, end_year])
+    ys, ye = sorted([int(start_year), int(end_year)])
 
     # 스냅샷 저장 폴더 기본값: 결과 엑셀과 같은 폴더
     if not snap_out or use_default_snapshot_dir:

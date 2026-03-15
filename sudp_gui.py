@@ -16,7 +16,9 @@ class SudpApp(tk.Tk):
         self.geometry("960x720")
 
         self.var_start_year = tk.StringVar()
+        self.var_start_month = tk.StringVar()
         self.var_end_year = tk.StringVar()
+        self.var_end_month = tk.StringVar()
         self.var_reserve_price = tk.StringVar()
         self.var_hhv = tk.StringVar()
         self.var_result_mode = tk.StringVar(value="시간별")
@@ -40,30 +42,36 @@ class SudpApp(tk.Tk):
         ttk.Label(top, text="시작연도").grid(row=0, column=0, sticky="w", **pad)
         ttk.Entry(top, textvariable=self.var_start_year, width=12).grid(row=0, column=1, sticky="w", **pad)
 
-        ttk.Label(top, text="종료연도").grid(row=0, column=2, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_end_year, width=12).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(top, text="시작월").grid(row=0, column=2, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_start_month, width=8).grid(row=0, column=3, sticky="w", **pad)
 
-        ttk.Label(top, text="예비력 단가").grid(row=0, column=4, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_reserve_price, width=12).grid(row=0, column=5, sticky="w", **pad)
+        ttk.Label(top, text="종료연도").grid(row=0, column=4, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_end_year, width=12).grid(row=0, column=5, sticky="w", **pad)
 
-        ttk.Label(top, text="적용 발열량(HHV, kcal/kg)").grid(row=0, column=6, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_hhv, width=14).grid(row=0, column=7, sticky="w", **pad)
+        ttk.Label(top, text="종료월").grid(row=0, column=6, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_end_month, width=8).grid(row=0, column=7, sticky="w", **pad)
 
-        ttk.Label(top, text="결과 형식").grid(row=1, column=0, sticky="w", **pad)
+        ttk.Label(top, text="예비력 단가").grid(row=1, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_reserve_price, width=12).grid(row=1, column=1, sticky="w", **pad)
+
+        ttk.Label(top, text="적용 발열량(HHV, kcal/kg)").grid(row=1, column=2, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_hhv, width=14).grid(row=1, column=3, sticky="w", **pad)
+
+        ttk.Label(top, text="결과 형식").grid(row=1, column=4, sticky="w", **pad)
         ttk.Combobox(top, textvariable=self.var_result_mode, values=["시간별", "연도별"], width=10, state="readonly").grid(
-            row=1, column=1, sticky="w", **pad
+            row=1, column=5, sticky="w", **pad
         )
 
-        ttk.Label(top, text="자원코드").grid(row=1, column=2, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_codes, width=55).grid(row=1, column=3, columnspan=5, sticky="we", **pad)
+        ttk.Label(top, text="자원코드").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_codes, width=55).grid(row=2, column=1, columnspan=7, sticky="we", **pad)
 
-        ttk.Label(top, text="SUDP 루트").grid(row=2, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_root, width=80).grid(row=2, column=1, columnspan=6, sticky="we", **pad)
-        ttk.Button(top, text="찾아보기", command=self._choose_root).grid(row=2, column=7, sticky="e", **pad)
+        ttk.Label(top, text="SUDP 루트").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_root, width=80).grid(row=3, column=1, columnspan=6, sticky="we", **pad)
+        ttk.Button(top, text="찾아보기", command=self._choose_root).grid(row=3, column=7, sticky="e", **pad)
 
-        ttk.Label(top, text="저장경로").grid(row=3, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.var_out, width=80).grid(row=3, column=1, columnspan=6, sticky="we", **pad)
-        ttk.Button(top, text="찾아보기", command=self._choose_out).grid(row=3, column=7, sticky="e", **pad)
+        ttk.Label(top, text="저장경로").grid(row=4, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_out, width=80).grid(row=4, column=1, columnspan=6, sticky="we", **pad)
+        ttk.Button(top, text="찾아보기", command=self._choose_out).grid(row=4, column=7, sticky="e", **pad)
 
         snap = ttk.LabelFrame(self, text="스냅샷 옵션 (SUDP 폴더 백업)")
         snap.pack(fill="x", padx=12, pady=(0, 10))
@@ -150,7 +158,9 @@ class SudpApp(tk.Tk):
     def _run_job(self) -> None:
         try:
             start_year = int(self.var_start_year.get().strip())
+            start_month = int((self.var_start_month.get().strip() or "1"))
             end_year = int(self.var_end_year.get().strip())
+            end_month = int((self.var_end_month.get().strip() or "12"))
             reserve_price = float(self.var_reserve_price.get().strip() or 0)
             hhv = float(self.var_hhv.get().strip() or 4500)
             codes_csv = self.var_codes.get().strip()
@@ -170,7 +180,9 @@ class SudpApp(tk.Tk):
                 root=self.var_root.get().strip() or str(DEFAULT_ROOT),
                 codes_csv=codes_csv,
                 start_year=start_year,
+                start_month=start_month,
                 end_year=end_year,
+                end_month=end_month,
                 out_path=out_path,
                 reserve_price=reserve_price,
                 result_mode=self.var_result_mode.get().strip() or "시간별",

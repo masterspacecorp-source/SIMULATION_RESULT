@@ -250,8 +250,23 @@ def safe_concat(frames):
         out = out.sort_values(["연도","월","일","시간"])
     return out
 
+
+def iter_year_months(ys: int, ms: int, ye: int, me: int):
+    """시작(연,월)~종료(연,월) 범위의 (연,월) 튜플을 순회한다."""
+    ys, ye = int(ys), int(ye)
+    ms, me = int(ms), int(me)
+    if (ys, ms) > (ye, me):
+        ys, ye = ye, ys
+        ms, me = me, ms
+
+    for y in range(ys, ye + 1):
+        m_start = ms if y == ys else 1
+        m_end = me if y == ye else 12
+        for m in range(m_start, m_end + 1):
+            yield y, m
+
 # ===== 카탈로그 스캔 =====
-def scan_catalog_all(root: Path, ys:int, ye:int):
+def scan_catalog_all(root: Path, ys:int, ms:int, ye:int, me:int):
     """
     선택 기간의 모든 연/월/CCDATA·THDATA의 CD_DATA.txt를 끝까지 훑어
     - 자원코드/자원명/자원ID/설비용량/송전단최대용량 누적(최신값 우선)
@@ -259,40 +274,39 @@ def scan_catalog_all(root: Path, ys:int, ye:int):
     반환: catalog_df, code_to_id, id_to_name, id_to_capacity_x2
     """
     records = []
-    for y in range(ys, ye+1):
-        for m in range(1,13):
-            for sub in ["CCDATA","THDATA"]:
-                p = root/str(y)/f"{m:02d}"/sub/"CD_DATA.txt"
-                df = read_table_flexible(p)
-                if df is None: 
-                    continue
-                cols = df.columns
-                c_code = "자원코드" if "자원코드" in cols else None
-                c_name = "자원명"   if "자원명"   in cols else None
-                c_id   = "자원ID"   if "자원ID"   in cols else None
-                c_cap  = "설비용량" if "설비용량" in cols else None
-                c_tx   = "송전단최대용량" if "송전단최대용량" in cols else None
-                c_ru   = "Ramp-up Rate"  if "Ramp-up Rate"  in cols else None
-                c_hot  = "HOT기동비용"    if "HOT기동비용"    in cols else None   # ★ 추가
-                if not (c_code and c_name and c_id):
-                    continue
+    for y, m in iter_year_months(ys, ms, ye, me):
+        for sub in ["CCDATA","THDATA"]:
+            p = root/str(y)/f"{m:02d}"/sub/"CD_DATA.txt"
+            df = read_table_flexible(p)
+            if df is None:
+                continue
+            cols = df.columns
+            c_code = "자원코드" if "자원코드" in cols else None
+            c_name = "자원명"   if "자원명"   in cols else None
+            c_id   = "자원ID"   if "자원ID"   in cols else None
+            c_cap  = "설비용량" if "설비용량" in cols else None
+            c_tx   = "송전단최대용량" if "송전단최대용량" in cols else None
+            c_ru   = "Ramp-up Rate"  if "Ramp-up Rate"  in cols else None
+            c_hot  = "HOT기동비용"    if "HOT기동비용"    in cols else None
+            if not (c_code and c_name and c_id):
+                continue
 
-                for _, r in df.iterrows():
-                    try:
-                        rid = int(float(str(r[c_id])))
-                    except:
-                        continue
-                    rec = {
-                        "스냅연": y, "스냅월": m,
-                        "자원코드": str(r[c_code]).strip(),
-                        "자원명":   str(r[c_name]).strip(),
-                        "자원ID":   rid,
-                        "설비용량": float(r[c_cap]) if c_cap in df.columns else np.nan,
-                        "송전단최대용량": float(r[c_tx]) if c_tx in df.columns else np.nan,
-                        "Ramp-up Rate": float(r[c_ru]) if c_ru in df.columns and pd.notna(r[c_ru]) else np.nan,
-                        "HOT기동비용":  float(r[c_hot]) if c_hot in df.columns and pd.notna(r[c_hot]) else np.nan,  # ★
-                    }
-                    records.append(rec)
+            for _, r in df.iterrows():
+                try:
+                    rid = int(float(str(r[c_id])))
+                except Exception:
+                    continue
+                rec = {
+                    "스냅연": y, "스냅월": m,
+                    "자원코드": str(r[c_code]).strip(),
+                    "자원명":   str(r[c_name]).strip(),
+                    "자원ID":   rid,
+                    "설비용량": float(r[c_cap]) if c_cap in df.columns else np.nan,
+                    "송전단최대용량": float(r[c_tx]) if c_tx in df.columns else np.nan,
+                    "Ramp-up Rate": float(r[c_ru]) if c_ru in df.columns and pd.notna(r[c_ru]) else np.nan,
+                    "HOT기동비용":  float(r[c_hot]) if c_hot in df.columns and pd.notna(r[c_hot]) else np.nan,
+                }
+                records.append(rec)
 
     if not records:
         return pd.DataFrame(), {}, {}, {}, {}, {}
@@ -356,24 +370,24 @@ def pick_units_wide(df_long: pd.DataFrame, target_ids: list, id_to_name: dict):
     fixed = ["연도","월","일","요일","시간"] + [nm for rid, nm in sorted(col_map.items(), key=lambda x:x[0])]
     return wide[fixed]
 
-def build_basic(root:Path, ys:int, ye:int, key:str, target_ids:list, id_to_name:dict):
+def build_basic(root:Path, ys:int, ms:int, ye:int, me:int, key:str, target_ids:list, id_to_name:dict):
     fname = RESULT_FILENAMES[key]
     frames=[]
-    for y in range(ys, ye+1):
-        for m in range(1,13):
-            df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/fname)
-            if df is None: continue
-            long = expand_month_matrix(df, y, m)
-            wide = pick_units_wide(long, target_ids, id_to_name)
-            frames.append(wide)
+    for y, m in iter_year_months(ys, ms, ye, me):
+        df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/fname)
+        if df is None:
+            continue
+        long = expand_month_matrix(df, y, m)
+        wide = pick_units_wide(long, target_ids, id_to_name)
+        frames.append(wide)
     out = safe_concat(frames)
     if not out.empty:
         for c in ["연도","월","일","시간"]:
             out[c] = out[c].astype(int)
     return out
 
-def build_utilization(root:Path, ys:int, ye:int, target_ids:list, id_to_name:dict, id_to_capacity_x2:dict):
-    gross = build_basic(root, ys, ye, "발전량", target_ids, id_to_name)  # CD_POWER_GROSS
+def build_utilization(root:Path, ys:int, ms:int, ye:int, me:int, target_ids:list, id_to_name:dict, id_to_capacity_x2:dict):
+    gross = build_basic(root, ys, ms, ye, me, "발전량", target_ids, id_to_name)  # CD_POWER_GROSS
     if gross.empty: return gross
     # 각 발전기 열에 대해 분모(설비용량×2) 적용
     for rid in target_ids:
@@ -387,11 +401,11 @@ def build_utilization(root:Path, ys:int, ye:int, target_ids:list, id_to_name:dic
             gross[col] = (gross[col] / denom) * 100.0
     return gross
 
-def build_settlement(root:Path, ys:int, ye:int, target_ids:list, id_to_name:dict):
+def build_settlement(root:Path, ys:int, ms:int, ye:int, me:int, target_ids:list, id_to_name:dict):
     # 1) 원천 표 생성
-    mep = build_basic(root, ys, ye, "MEP", target_ids, id_to_name)
-    map_ = build_basic(root, ys, ye, "MAP", target_ids, id_to_name)
-    mwp = build_basic(root, ys, ye, "MWP", target_ids, id_to_name)
+    mep = build_basic(root, ys, ms, ye, me, "MEP", target_ids, id_to_name)
+    map_ = build_basic(root, ys, ms, ye, me, "MAP", target_ids, id_to_name)
+    mwp = build_basic(root, ys, ms, ye, me, "MWP", target_ids, id_to_name)
 
     on = ["연도","월","일","요일","시간"]
 
@@ -455,15 +469,16 @@ def build_settlement(root:Path, ys:int, ye:int, target_ids:list, id_to_name:dict
     return out
 
 
-def build_smp_hourly(root:Path, ys:int, ye:int, id_to_name:dict):
+def build_smp_hourly(root:Path, ys:int, ms:int, ye:int, me:int, id_to_name:dict):
     # 1) SMP 값
     smp_frames=[]; unit_frames=[]
-    for y in range(ys, ye+1):
-        for m in range(1,13):
-            ds = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/RESULT_FILENAMES["SMP"])
-            du = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/RESULT_FILENAMES["SMPUNIT"])
-            if ds is not None: smp_frames.append( expand_month_matrix(ds, y, m) )
-            if du is not None: unit_frames.append( expand_month_matrix(du, y, m) )
+    for y, m in iter_year_months(ys, ms, ye, me):
+        ds = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/RESULT_FILENAMES["SMP"])
+        du = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/RESULT_FILENAMES["SMPUNIT"])
+        if ds is not None:
+            smp_frames.append(expand_month_matrix(ds, y, m))
+        if du is not None:
+            unit_frames.append(expand_month_matrix(du, y, m))
     smp  = safe_concat(smp_frames)
     unit = safe_concat(unit_frames)
     if smp.empty:
@@ -506,7 +521,7 @@ def build_smp_hourly(root:Path, ys:int, ye:int, id_to_name:dict):
 
     return smp_pv[["연도","월","일","요일","시간","경인","경인 결정 발전기","비경인","비경인 결정 발전기","제주","제주 결정 발전기"]].sort_values(["연도","월","일","시간"])
 
-def read_load_long(root: Path, ys:int, ye:int):
+def read_load_long(root: Path, ys:int, ms:int, ye:int, me:int):
     """
     각 연/월의 OPTION/UD_LOAD.txt를 읽어서
     - LOAD: 총수요
@@ -514,32 +529,31 @@ def read_load_long(root: Path, ys:int, ye:int):
     를 시간축으로 확장해 반환.
     """
     frames = []
-    for y in range(ys, ye+1):
-        for m in range(1, 13):
-            p = root/str(y)/f"{m:02d}"/"OPTION"/"UD_LOAD.txt"
-            df = read_table_flexible(p)
-            if df is None or df.empty:
-                continue
-            # 첫 열: 지표명(LOAD/NLD/JLD), 나머지 열: 슬롯(1..744)
-            long = expand_month_matrix(df, y, m)  # 키=지표명
-            if long is None or long.empty:
-                continue
-            # 필요한 지표만 남긴다: 총수요(LOAD), 제주수요(JLD)
-            need = long[ long["키"].astype(str).isin(["LOAD","JLD"]) ].copy()
-            if need.empty:
-                continue
-            pv = need.pivot_table(
-                index=["연도","월","일","요일","시간","슬롯"],
-                columns="키", values="value", aggfunc="first"
-            ).reset_index()
-            # 결측 방어
-            if "LOAD" not in pv.columns: pv["LOAD"] = np.nan
-            if "JLD"  not in pv.columns: pv["JLD"]  = np.nan
-            frames.append(pv)
+    for y, m in iter_year_months(ys, ms, ye, me):
+        p = root/str(y)/f"{m:02d}"/"OPTION"/"UD_LOAD.txt"
+        df = read_table_flexible(p)
+        if df is None or df.empty:
+            continue
+        # 첫 열: 지표명(LOAD/NLD/JLD), 나머지 열: 슬롯(1..744)
+        long = expand_month_matrix(df, y, m)  # 키=지표명
+        if long is None or long.empty:
+            continue
+        # 필요한 지표만 남긴다: 총수요(LOAD), 제주수요(JLD)
+        need = long[ long["키"].astype(str).isin(["LOAD","JLD"]) ].copy()
+        if need.empty:
+            continue
+        pv = need.pivot_table(
+            index=["연도","월","일","요일","시간","슬롯"],
+            columns="키", values="value", aggfunc="first"
+        ).reset_index()
+        # 결측 방어
+        if "LOAD" not in pv.columns: pv["LOAD"] = np.nan
+        if "JLD"  not in pv.columns: pv["JLD"]  = np.nan
+        frames.append(pv)
     return safe_concat(frames)
 
 
-def build_smp_yearly(root:Path, ys:int, ye:int, id_to_name:dict):
+def build_smp_yearly(root:Path, ys:int, ms:int, ye:int, me:int, id_to_name:dict):
     """
     연도별 요약표:
     연도 /
@@ -549,7 +563,7 @@ def build_smp_yearly(root:Path, ys:int, ye:int, id_to_name:dict):
     * 가중평균: 경인/비경인은 총수요(LOAD), 제주는 제주수요(JLD)를 가중치로 사용
     """
     # 시간별 SMP + 결정발전기명
-    hourly = build_smp_hourly(root, ys, ye, id_to_name)
+    hourly = build_smp_hourly(root, ys, ms, ye, me, id_to_name)
     if hourly is None or hourly.empty:
         cols = ["연도",
                 "경인_최대","경인_자원명(최대)","경인_최소","경인_자원명(최소)","경인_평균","경인_가중평균",
@@ -558,7 +572,7 @@ def build_smp_yearly(root:Path, ys:int, ye:int, id_to_name:dict):
         return pd.DataFrame(columns=cols)
 
     # 수요
-    load = read_load_long(root, ys, ye)   # LOAD, JLD
+    load = read_load_long(root, ys, ms, ye, me)   # LOAD, JLD
     # 시간축 결합
     df = hourly.merge(load, on=["연도","월","일","요일","시간"], how="left")
 
@@ -611,15 +625,15 @@ def build_smp_yearly(root:Path, ys:int, ye:int, id_to_name:dict):
             "제주_최대","제주_자원명(최대)","제주_최소","제주_자원명(최소)","제주_평균","제주_가중평균"]
     return pd.DataFrame(rows, columns=cols).sort_values("연도")
 
-def build_reserve_capacity_payment(root:Path, ys:int, ye:int,
+def build_reserve_capacity_payment(root:Path, ys:int, ms:int, ye:int, me:int,
                                    target_ids:list, id_to_name:dict,
                                    id_to_ru:dict, unit_price:float):
     """예비력용량가치정산금: 시간별로 발전기별 금액 산출"""
     on = ["연도","월","일","요일","시간"]
 
     # 원천: 입찰량/송전량
-    avail = build_basic(root, ys, ye, "입찰량", target_ids, id_to_name)
-    send  = build_basic(root, ys, ye, "송전량", target_ids, id_to_name)
+    avail = build_basic(root, ys, ms, ye, me, "입찰량", target_ids, id_to_name)
+    send  = build_basic(root, ys, ms, ye, me, "송전량", target_ids, id_to_name)
 
     # 키 기준 외부조인(시간축 정렬)
     base = avail[on].drop_duplicates() if avail is not None and not avail.empty else pd.DataFrame(columns=on)
@@ -686,32 +700,30 @@ def build_reserve_capacity_payment(root:Path, ys:int, ye:int,
 
     return out
 
-def read_startup_long(root:Path, ys:int, ye:int, target_ids:list, id_to_name:dict):
+def read_startup_long(root:Path, ys:int, ms:int, ye:int, me:int, target_ids:list, id_to_name:dict):
     """RESULT/CD_RESULT_STUP.txt : 자원ID별 시간당 0/1 → long 형태로."""
     frames = []
-    for y in range(ys, ye+1):
-        for m in range(1,13):
-            p = root/str(y)/f"{m:02d}"/"RESULT"/"CD_RESULT_STUP.txt"
-            df = read_table_flexible(p)  # 첫 열: 자원ID/자원코드 비슷, 나머지 1..744
-            if df is None or df.empty:
-                continue
-            long = expand_month_matrix(df, y, m)  # columns: ["키",1..744] → ["키","슬롯","value"] + y/m/d/h/w
-            if long is None or long.empty:
-                continue
-            # 키가 숫자(자원ID)인 행만 남기고 대상만 필터
-            long["자원ID"] = pd.to_numeric(long["키"], errors="coerce").astype("Int64")
-            long = long[ long["자원ID"].isin(pd.array(target_ids, dtype="Int64")) ].copy()
-            if long.empty:
-                continue
-            long["자원명"] = long["자원ID"].map(id_to_name)
-            long = long.rename(columns={"value":"STUP"})
-            frames.append(long[["연도","월","일","요일","시간","자원ID","자원명","STUP"]])
+    for y, m in iter_year_months(ys, ms, ye, me):
+        p = root/str(y)/f"{m:02d}"/"RESULT"/"CD_RESULT_STUP.txt"
+        df = read_table_flexible(p)
+        if df is None or df.empty:
+            continue
+        long = expand_month_matrix(df, y, m)
+        if long is None or long.empty:
+            continue
+        long["자원ID"] = pd.to_numeric(long["키"], errors="coerce").astype("Int64")
+        long = long[ long["자원ID"].isin(pd.array(target_ids, dtype="Int64")) ].copy()
+        if long.empty:
+            continue
+        long["자원명"] = long["자원ID"].map(id_to_name)
+        long = long.rename(columns={"value":"STUP"})
+        frames.append(long[["연도","월","일","요일","시간","자원ID","자원명","STUP"]])
     return safe_concat(frames)
 
 
 def build_generation_cost(
     root: Path,
-    ys: int, ye: int,
+    ys: int, ms: int, ye: int, me: int,
     target_ids: list[int],
     id_to_name: dict[int, str],
     id_to_hot: dict[int, float],
@@ -729,15 +741,14 @@ def build_generation_cost(
     # (프로젝트 공용 경로와 동일: expand_month_matrix → pick_units_wide)  :contentReference[oaicite:2]{index=2}
     def _collect_wide(fname: str) -> list[pd.DataFrame]:
         frames = []
-        for y in range(ys, ye+1):
-            for m in range(1, 13):
-                df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/fname)
-                if df is None:
-                    continue
-                long = expand_month_matrix(df, y, m)  # (연/월/일/요일/시간, 키, value)
-                wide = pick_units_wide(long, target_ids, id_to_name)  # 자원ID→자원명 열 변환 포함  :contentReference[oaicite:3]{index=3}
-                if wide is not None and not wide.empty:
-                    frames.append(wide)
+        for y, m in iter_year_months(ys, ms, ye, me):
+            df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/fname)
+            if df is None:
+                continue
+            long = expand_month_matrix(df, y, m)
+            wide = pick_units_wide(long, target_ids, id_to_name)
+            if wide is not None and not wide.empty:
+                frames.append(wide)
         out = safe_concat(frames)
         if not out.empty:
             for c in ["연도","월","일","시간"]:
@@ -750,44 +761,37 @@ def build_generation_cost(
     # 2) 기동비용 = STUP(0/1) × HOT(원/회)
     #    STUP도 같은 방식으로 읽되, long 단계에서 HOT을 곱해 'value'를 비용으로 바꾼 후 wide 피벗.
     frames_stup_hot = []
-    for y in range(ys, ye+1):
-        for m in range(1, 13):
-            df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/"CD_RESULT_STUP.txt")
-            if df is None:
-                continue
-            long = expand_month_matrix(df, y, m)  # (연/월/일/요일/시간, 키, value=0/1)
-
-            if long is None or long.empty:
-                continue
-            tmp = long.copy()
-            # 자원ID 정규화
-            tmp = tmp[tmp["키"].astype(str).str.replace(".0","", regex=False).str.isdigit()]
-            if tmp.empty:
-                continue
-            tmp["자원ID"] = tmp["키"].astype(float).astype(int)
-            tmp = tmp[tmp["자원ID"].isin(target_ids)]
-            if tmp.empty:
-                continue
-            # HOT(원/회) 적용
-            tmp["HOT"] = tmp["자원ID"].map(id_to_hot).fillna(0.0)
-            tmp["value"] = pd.to_numeric(tmp["value"], errors="coerce").fillna(0.0) * tmp["HOT"]
-            # wide 피벗(자원명으로 열명 변환)
-            wide = tmp.pivot_table(index=on, columns="자원ID", values="value", aggfunc="sum").reset_index()
-            # 열 이름을 자원명으로 치환(+동명이면 "이름 (ID)")
-            col_map, used = {}, set()
-            for rid in [c for c in wide.columns if isinstance(c, (int, np.integer))]:
-                base = id_to_name.get(int(rid), str(int(rid)))
-                name = base if base not in used else f"{base} ({int(rid)})"
-                used.add(name)
-                col_map[rid] = name
-            wide = wide.rename(columns=col_map)
-            # 빠진 타깃은 NaN 열 생성(표 형태 맞춤)
-            for rid in target_ids:
-                nm = col_map.get(rid, id_to_name.get(rid, str(rid)))
-                if nm not in wide.columns:
-                    wide[nm] = np.nan
-            wide = wide[on + [c for c in wide.columns if c not in on]]
-            frames_stup_hot.append(wide)
+    for y, m in iter_year_months(ys, ms, ye, me):
+        df = read_table_flexible(root/str(y)/f"{m:02d}"/"RESULT"/"CD_RESULT_STUP.txt")
+        if df is None:
+            continue
+        long = expand_month_matrix(df, y, m)
+        if long is None or long.empty:
+            continue
+        tmp = long.copy()
+        tmp = tmp[tmp["키"].astype(str).str.replace(".0","", regex=False).str.isdigit()]
+        if tmp.empty:
+            continue
+        tmp["자원ID"] = tmp["키"].astype(float).astype(int)
+        tmp = tmp[tmp["자원ID"].isin(target_ids)]
+        if tmp.empty:
+            continue
+        tmp["HOT"] = tmp["자원ID"].map(id_to_hot).fillna(0.0)
+        tmp["value"] = pd.to_numeric(tmp["value"], errors="coerce").fillna(0.0) * tmp["HOT"]
+        wide = tmp.pivot_table(index=on, columns="자원ID", values="value", aggfunc="sum").reset_index()
+        col_map, used = {}, set()
+        for rid in [c for c in wide.columns if isinstance(c, (int, np.integer))]:
+            base = id_to_name.get(int(rid), str(int(rid)))
+            name = base if base not in used else f"{base} ({int(rid)})"
+            used.add(name)
+            col_map[rid] = name
+        wide = wide.rename(columns=col_map)
+        for rid in target_ids:
+            nm = col_map.get(rid, id_to_name.get(rid, str(rid)))
+            if nm not in wide.columns:
+                wide[nm] = np.nan
+        wide = wide[on + [c for c in wide.columns if c not in on]]
+        frames_stup_hot.append(wide)
 
     stup_cost = safe_concat(frames_stup_hot)
     if not stup_cost.empty:
@@ -825,17 +829,16 @@ def build_generation_cost(
     out = out.sort_values(on).reset_index(drop=True)
     return out
 
-def build_full_hourly_index(ys:int, ye:int) -> pd.DataFrame:
+def build_full_hourly_index(ys:int, ms:int, ye:int, me:int) -> pd.DataFrame:
     """시작~종료연도의 모든 연/월/일/시간 행(1~24h)을 생성."""
     rows = []
     wk_names = ["월","화","수","목","금","토","일"]  # datetime.weekday(): 월=0
-    for y in range(ys, ye+1):
-        for m in range(1, 13):
-            ndays = calendar.monthrange(y, m)[1]
-            for d in range(1, ndays+1):
-                w = wk_names[dt.date(y, m, d).weekday()]
-                for h in range(1, 25):  # 1..24
-                    rows.append((y, m, d, w, h))
+    for y, m in iter_year_months(ys, ms, ye, me):
+        ndays = calendar.monthrange(y, m)[1]
+        for d in range(1, ndays+1):
+            w = wk_names[dt.date(y, m, d).weekday()]
+            for h in range(1, 25):
+                rows.append((y, m, d, w, h))
     return pd.DataFrame(rows, columns=["연도","월","일","요일","시간"])
 
 
@@ -854,7 +857,7 @@ def aggregate_to_yearly(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
 
     agg_func = "mean" if sheet_name == "이용률" else "sum"
     tmp = df.copy()
-    tmp[value_cols] = tmp[value_cols].apply(pd.to_numeric, errors="coerce")
+    tmp[value_cols] = tmp[value_cols].apply(lambda s: pd.to_numeric(s.astype(str).str.replace(",", "", regex=False), errors="coerce"))
 
     out = (
         tmp.groupby("연도", as_index=False)[value_cols]
@@ -875,7 +878,7 @@ def build_fuel_sheet_with_ton(df: pd.DataFrame, applied_hhv: float) -> pd.DataFr
     val_cols = [c for c in base.columns if c not in key_cols]
 
     if val_cols:
-        base[val_cols] = base[val_cols].apply(pd.to_numeric, errors="coerce") * 1000.0
+        base[val_cols] = base[val_cols].apply(lambda s: pd.to_numeric(s.astype(str).str.replace(",", "", regex=False), errors="coerce")) * 1000.0
 
     ton_tbl = base.copy()
     ton_val_cols = [c for c in ton_tbl.columns if c not in key_cols]
@@ -896,7 +899,9 @@ def build_fuel_sheet_with_ton(df: pd.DataFrame, applied_hhv: float) -> pd.DataFr
 def run(root: str = None,
         codes_csv: str = None,
         start_year: int = None,
+        start_month: int = None,
         end_year: int = None,
+        end_month: int = None,
         out_path: str = None,
         reserve_price: float = None,
         result_mode: str = None,             # "시간별" | "연도별"
@@ -930,7 +935,9 @@ def run(root: str = None,
         parser.add_argument("--root")
         parser.add_argument("--codes")
         parser.add_argument("--start-year", type=int)
+        parser.add_argument("--start-month", type=int)
         parser.add_argument("--end-year", type=int)
+        parser.add_argument("--end-month", type=int)
         parser.add_argument("--out")
         parser.add_argument("--ru-price", type=float)
         parser.add_argument("--result-mode", choices=["시간별", "연도별"])
@@ -945,7 +952,9 @@ def run(root: str = None,
         root        = root        or cli.root or DEFAULT_ROOT
         codes_csv   = codes_csv   or cli.codes
         start_year  = start_year  or cli.start_year
+        start_month = start_month or cli.start_month
         end_year    = end_year    or cli.end_year
+        end_month   = end_month or cli.end_month
         out_path    = out_path    or cli.out
         reserve_price = reserve_price or cli.ru_price
         if getattr(cli, "result_mode", None) is not None and result_mode is None:
@@ -978,6 +987,10 @@ def run(root: str = None,
         start_year = int(input("시작년도를 입력하세요 (예: 2026): ").strip())
     if end_year is None and is_tty:
         end_year = int(input("종료년도를 입력하세요 (예: 2035): ").strip())
+    if start_month is None and is_tty:
+        start_month = int(input("시작월을 입력하세요 (1~12, 기본=1): ").strip() or "1")
+    if end_month is None and is_tty:
+        end_month = int(input("종료월을 입력하세요 (1~12, 기본=12): ").strip() or "12")
     if reserve_price is None and is_tty:
         reserve_price = float(input("예비력용량가치 단가를 입력하세요 (예: 1.0): ").strip())
     if result_mode is None and is_tty:
@@ -993,6 +1006,13 @@ def run(root: str = None,
             "EXE 실행 시 --start-year, --end-year 옵션을 입력하세요."
         )
     ys, ye = sorted([int(start_year), int(end_year)])
+    ms = int(start_month or 1)
+    me = int(end_month or 12)
+    if not (1 <= ms <= 12 and 1 <= me <= 12):
+        raise ValueError("시작월/종료월은 1~12 범위로 입력하세요.")
+
+    if (ys, ms) > (ye, me):
+        ys, ye, ms, me = ye, ys, me, ms
 
     if not codes_csv:
         raise ValueError(
@@ -1005,7 +1025,6 @@ def run(root: str = None,
         out_path = f"SUDP_{ys}_{ye}.xlsx"
 
     root = Path(root)
-    ys, ye = sorted([start_year, end_year])
     result_mode = (result_mode or "시간별").strip()
     if result_mode not in ("시간별", "연도별"):
         result_mode = "시간별"
@@ -1046,7 +1065,7 @@ def run(root: str = None,
                 
     # ---------------- 카탈로그/타깃 선정 ----------------
     # (중요) RU/HOT 포함 전체 스캔
-    catalog, code_to_id, id_to_name, id_to_capacity_x2, id_to_ru, id_to_hot = scan_catalog_all(root, ys, ye)
+    catalog, code_to_id, id_to_name, id_to_capacity_x2, id_to_ru, id_to_hot = scan_catalog_all(root, ys, ms, ye, me)
 
     # id_to_code (역매핑) / code_to_hot 만들기
     id_to_code = {rid: code for code, rid in code_to_id.items()}
@@ -1081,32 +1100,32 @@ def run(root: str = None,
     sheets = {}
     # 기본 4종 (+발전비용은 아래에서 커스텀)
     for key in ["입찰량","발전량","송전량","연료사용량"]:
-        sheets[key] = build_basic(root, ys, ye, key, target_ids, id_to_name)
+        sheets[key] = build_basic(root, ys, ms, ye, me, key, target_ids, id_to_name)
 
     # 발전비용: [발전/기동/연료] 분리 + 2단 헤더 렌더링용 이름목록
     sheets["발전비용"] = build_generation_cost(
-    root, ys, ye,
+    root, ys, ms, ye, me,
     target_ids=target_ids,
     id_to_name=id_to_name,
     id_to_hot=id_to_hot,
     )
     # 이용률
-    sheets["이용률"] = build_utilization(root, ys, ye, target_ids, id_to_name, id_to_capacity_x2)
+    sheets["이용률"] = build_utilization(root, ys, ms, ye, me, target_ids, id_to_name, id_to_capacity_x2)
     # 정산금
-    sheets["정산금"] = build_settlement(root, ys, ye, target_ids, id_to_name)
+    sheets["정산금"] = build_settlement(root, ys, ms, ye, me, target_ids, id_to_name)
     # 예비력용량가치정산금
     sheets["예비력용량가치정산금"] = build_reserve_capacity_payment(
-        root, ys, ye, target_ids, id_to_name, id_to_ru, reserve_price)
+        root, ys, ms, ye, me, target_ids, id_to_name, id_to_ru, reserve_price)
     # SMP(시간별)
-    sheets["SMP(시간별)"] = build_smp_hourly(root, ys, ye, id_to_name)
+    sheets["SMP(시간별)"] = build_smp_hourly(root, ys, ms, ye, me, id_to_name)
     # SMP(연도별)
-    sheets["SMP(연도별)"] = build_smp_yearly(root, ys, ye, id_to_name)
+    sheets["SMP(연도별)"] = build_smp_yearly(root, ys, ms, ye, me, id_to_name)
 
 
     # --- 시간별/연도별 모드 처리 ---
     if result_mode == "시간별":
         # 전체 시간 인덱스(공란 패딩용)
-        full_idx = build_full_hourly_index(ys, ye)
+        full_idx = build_full_hourly_index(ys, ms, ye, me)
         key_cols = ["연도","월","일","요일","시간"]
 
         # 시간 축을 가지는 시트들 (연도 요약 시트 제외)
@@ -1318,11 +1337,10 @@ def run(root: str = None,
 
                 # --- 2) 안전한 출력 순서 구성 (없는 조합은 빈 열 생성) ---
                 ordered_cols = key_cols[:]
-                for mt in metrics:
-                    for nm in names_order:
+                for nm in names_order:
+                    for mt in metrics:
                         colname = metric_to_map[mt].get(nm)
                         if colname is None:
-                            # 빈 열 추가
                             base_df[f"{mt}|{nm}"] = pd.NA
                             colname = f"{mt}|{nm}"
                         ordered_cols.append(colname)
@@ -1341,17 +1359,13 @@ def run(root: str = None,
                 for i, lab in enumerate(key_cols):
                     ws.merge_range(1, i, 2, i, lab, fmt_head)
 
-                # 1행: 대분류(발전/기동/연료) 병합, 2행: 자원명
-                col0 = len(key_cols)  # ★ 항상 5에서 시작
-                width = len(names_order)
-                for mt in metrics:
-                    if width <= 1:
-                        ws.write(1, col0, mt, fmt_head)
-                    else:
-                        ws.merge_range(1, col0, 1, col0 + width - 1, mt, fmt_head)
-                    for j, nm in enumerate(names_order):
-                        ws.write(2, col0 + j, nm, fmt_head)
-                    col0 += max(width, 1)
+                # 1행: 발전기명 병합, 2행: 발전/기동/연료
+                col0 = len(key_cols)
+                for nm in names_order:
+                    ws.merge_range(1, col0, 1, col0 + len(metrics) - 1, nm, fmt_head)
+                    for j, mt in enumerate(metrics):
+                        ws.write(2, col0 + j, mt, fmt_head)
+                    col0 += len(metrics)
 
                 # 본문 포맷 (정렬·서식)
                 nrows, ncols = base_df.shape
@@ -1423,6 +1437,8 @@ def run(root: str = None,
                         right_start = split_col + 1
                         right_key_last = right_start + key_len - 1
                         right_val_start = right_key_last + 1
+                        if right_key_last >= right_start:
+                            ws.conditional_format(r1, right_start, r2, right_key_last, {"type":"no_blanks","format":fmt_key})
                         if right_val_start <= ncols - 1:
                             ws.conditional_format(r1, right_val_start, r2, ncols-1, {"type":"no_blanks","format":fmt_num})
                     else:

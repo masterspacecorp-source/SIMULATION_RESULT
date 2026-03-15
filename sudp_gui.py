@@ -231,12 +231,12 @@ class App(tk.Tk):
         # 백그라운드 실행
         t = threading.Thread(
             target=self._run_job,
-            args=(codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name),
+            args=(codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name, self.var_snap_use_default.get()),
             daemon=True
         )
         t.start()
 
-    def _run_job(self, codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name):
+    def _run_job(self, codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name, use_default_snapshot_dir):
         try:
             # sudp_core.run의 최신 시그니처에 맞춰 호출
             generate_report(
@@ -250,6 +250,7 @@ class App(tk.Tk):
                 snapshot_mode=(snapshot_mode or "zip"),
                 snapshot_out=snap_dir,
                 snapshot_name=snapshot_name,
+                use_default_snapshot_dir=use_default_snapshot_dir,
             )
             self._append_log("[완료] 엑셀 생성 성공\n")
             self._set_status("완료! 엑셀 파일이 생성되었습니다.")

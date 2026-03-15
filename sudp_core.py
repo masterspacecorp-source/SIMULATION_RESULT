@@ -868,6 +868,31 @@ def aggregate_to_yearly(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     return out
 
 
+def aggregate_fuel_to_yearly(df: pd.DataFrame) -> pd.DataFrame:
+    """연료사용량 전용 연도 집계(시간별 합계). 문자열 숫자(콤마)도 안전 변환."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["연도"])
+    if "연도" not in df.columns:
+        return df.copy()
+
+    key_cols = [c for c in ["연도", "월", "일", "요일", "시간"] if c in df.columns]
+    val_cols = [c for c in df.columns if c not in key_cols]
+    if not val_cols:
+        return df[["연도"]].drop_duplicates().sort_values("연도").reset_index(drop=True)
+
+    tmp = df.copy()
+    for c in val_cols:
+        tmp[c] = pd.to_numeric(tmp[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
+
+    out = (
+        tmp.groupby("연도", as_index=False)[val_cols]
+        .sum(min_count=1)
+        .sort_values("연도")
+        .reset_index(drop=True)
+    )
+    return out
+
+
 def build_fuel_sheet_with_ton(df: pd.DataFrame, applied_hhv: float) -> pd.DataFrame:
     """연료사용량 시트: [열량(Mcal)] + 빈 열 + [연료량(ton)] 2개 표를 병렬 생성."""
     if df is None:
@@ -1142,11 +1167,15 @@ def run(root: str = None,
             sheets[name] = full_idx.merge(df, on=key_cols, how="left")
     else:
         yearly_targets = [
-            "입찰량","발전량","송전량","연료사용량","발전비용",
+            "입찰량","발전량","송전량","발전비용",
             "이용률","정산금","예비력용량가치정산금"
         ]
         for name in yearly_targets:
             sheets[name] = aggregate_to_yearly(sheets.get(name), name)
+
+        # 연료사용량은 전용 경로로 집계(문자열 숫자/콤마 대응 강화)
+        sheets["연료사용량"] = aggregate_fuel_to_yearly(sheets.get("연료사용량"))
+
         # 연도별 결과에서는 SMP(시간별) 제외
         if "SMP(시간별)" in sheets:
             del sheets["SMP(시간별)"]
@@ -1417,10 +1446,34 @@ def run(root: str = None,
 
                 # 열 폭
                 if ncols > 0:
-                    ws.set_column(0, ncols-1, 14, fmt_center_noborder)
-                    ws.set_column(0, min(4, ncols-1), 8, fmt_center_noborder)
+                    def _col_width(series: pd.Series, header: str, min_w: int = 8, max_w: int = 28) -> int:
+                        sval = series.astype(str).replace({"nan": "", "None": ""}) if series is not None else pd.Series(dtype=str)
+                        max_len = max([len(str(header))] + ([int(sval.map(len).max())] if not sval.empty else [0]))
+                        return max(min_w, min(max_w, max_len + 2))
+
+                    key_names = ["연도", "월", "일", "요일", "시간"]
+
                     if split_col >= 0:
+                        # 왼쪽 표 자동 너비
+                        for i in range(0, split_col):
+                            cname = str(base_df.columns[i])
+                            width = _col_width(base_df.iloc[:, i], cname, min_w=(8 if cname in key_names else 10))
+                            ws.set_column(i, i, width, fmt_center_noborder)
+
+                        # 구분 공백열
                         ws.set_column(split_col, split_col, 3, fmt_center_noborder)
+
+                        # 오른쪽 표 자동 너비
+                        for i in range(split_col + 1, ncols):
+                            cname = str(base_df.columns[i])
+                            is_right_key = cname in key_names
+                            width = _col_width(base_df.iloc[:, i], cname, min_w=(8 if is_right_key else 10))
+                            ws.set_column(i, i, width, fmt_center_noborder)
+                    else:
+                        for i in range(0, ncols):
+                            cname = str(base_df.columns[i])
+                            width = _col_width(base_df.iloc[:, i], cname, min_w=(8 if cname in key_names else 10))
+                            ws.set_column(i, i, width, fmt_center_noborder)
 
                 # 본문 포맷
                 if nrows > 0 and ncols > 0:

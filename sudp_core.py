@@ -838,6 +838,60 @@ def build_full_hourly_index(ys:int, ye:int) -> pd.DataFrame:
                     rows.append((y, m, d, w, h))
     return pd.DataFrame(rows, columns=["연도","월","일","요일","시간"])
 
+
+def aggregate_to_yearly(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """시간별 결과를 연도별로 집계한다(이용률=평균, 나머지=합계)."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["연도"])
+
+    if "연도" not in df.columns:
+        return df.copy()
+
+    key_cols = [c for c in ["연도", "월", "일", "요일", "시간"] if c in df.columns]
+    value_cols = [c for c in df.columns if c not in key_cols]
+    if not value_cols:
+        return df[["연도"]].drop_duplicates().sort_values("연도").reset_index(drop=True)
+
+    agg_func = "mean" if sheet_name == "이용률" else "sum"
+    tmp = df.copy()
+    tmp[value_cols] = tmp[value_cols].apply(pd.to_numeric, errors="coerce")
+
+    out = (
+        tmp.groupby("연도", as_index=False)[value_cols]
+        .agg(agg_func)
+        .sort_values("연도")
+        .reset_index(drop=True)
+    )
+    return out
+
+
+def build_fuel_sheet_with_ton(df: pd.DataFrame, applied_hhv: float) -> pd.DataFrame:
+    """연료사용량 시트: [열량(Mcal)] + 빈 열 + [연료량(ton)] 2개 표를 병렬 생성."""
+    if df is None:
+        return pd.DataFrame()
+
+    base = df.copy()
+    key_cols = [c for c in ["연도", "월", "일", "요일", "시간"] if c in base.columns]
+    val_cols = [c for c in base.columns if c not in key_cols]
+
+    if val_cols:
+        base[val_cols] = base[val_cols].apply(pd.to_numeric, errors="coerce") * 1000.0
+
+    ton_tbl = base.copy()
+    ton_val_cols = [c for c in ton_tbl.columns if c not in key_cols]
+    if ton_val_cols:
+        if applied_hhv and applied_hhv > 0:
+            ton_tbl[ton_val_cols] = ton_tbl[ton_val_cols] / float(applied_hhv)
+        else:
+            ton_tbl[ton_val_cols] = np.nan
+
+    ton_tbl = ton_tbl.rename(columns={
+        c: f"{c}(ton)" for c in ton_tbl.columns if c not in key_cols
+    })
+
+    out = pd.concat([base, pd.DataFrame({"": [np.nan] * len(base)}), ton_tbl], axis=1)
+    return out
+
 # ===== 런처 =====
 def run(root: str = None,
         codes_csv: str = None,
@@ -845,6 +899,8 @@ def run(root: str = None,
         end_year: int = None,
         out_path: str = None,
         reserve_price: float = None,
+        result_mode: str = None,             # "시간별" | "연도별"
+        applied_hhv: float = None,            # 적용 발열량(HHV, kcal/kg)
         # GUI/CLI 스냅샷 인자
         snapshot: bool = False,
         snapshot_mode: str = "zip",           # "zip" | "copy"
@@ -877,6 +933,8 @@ def run(root: str = None,
         parser.add_argument("--end-year", type=int)
         parser.add_argument("--out")
         parser.add_argument("--ru-price", type=float)
+        parser.add_argument("--result-mode", choices=["시간별", "연도별"])
+        parser.add_argument("--hhv", type=float)
         parser.add_argument("--snapshot", action="store_true")
         parser.add_argument("--snapshot-mode", choices=["zip","copy"])
         parser.add_argument("--snapshot-out")
@@ -890,6 +948,10 @@ def run(root: str = None,
         end_year    = end_year    or cli.end_year
         out_path    = out_path    or cli.out
         reserve_price = reserve_price or cli.ru_price
+        if getattr(cli, "result_mode", None) is not None and result_mode is None:
+            result_mode = cli.result_mode
+        if applied_hhv is None and getattr(cli, "hhv", None) is not None:
+            applied_hhv = cli.hhv
 
         # 스냅샷(함수 인자가 우선, 없을 때만 CLI를 채용)
         if snapshot is False and getattr(cli, "snapshot", False):
@@ -918,14 +980,37 @@ def run(root: str = None,
         end_year = int(input("종료년도를 입력하세요 (예: 2035): ").strip())
     if reserve_price is None and is_tty:
         reserve_price = float(input("예비력용량가치 단가를 입력하세요 (예: 1.0): ").strip())
+    if result_mode is None and is_tty:
+        rm = input("결과 취합 방식(시간별/연도별, 기본=시간별): ").strip()
+        result_mode = rm if rm in ("시간별", "연도별") else "시간별"
+    if applied_hhv is None and is_tty:
+        applied_hhv = float(input("적용 발열량(HHV, kcal/kg)을 입력하세요 (예: 4500): ").strip())
+
+    # 필수 입력 검증 (noconsole/비대화형 실행 시 None 비교 에러 방지)
+    if start_year is None or end_year is None:
+        raise ValueError(
+            "시작연도/종료연도가 지정되지 않았습니다. "
+            "EXE 실행 시 --start-year, --end-year 옵션을 입력하세요."
+        )
+    ys, ye = sorted([int(start_year), int(end_year)])
+
+    if not codes_csv:
+        raise ValueError(
+            "자원코드가 지정되지 않았습니다. "
+            "EXE 실행 시 --codes 옵션(예: --codes \"2731,2732\")을 입력하세요."
+        )
 
     # 출력 파일 경로 기본값
     if out_path is None:
-        s, e = sorted([start_year, end_year])
-        out_path = f"SUDP_{s}_{e}.xlsx"
+        out_path = f"SUDP_{ys}_{ye}.xlsx"
 
     root = Path(root)
     ys, ye = sorted([start_year, end_year])
+    result_mode = (result_mode or "시간별").strip()
+    if result_mode not in ("시간별", "연도별"):
+        result_mode = "시간별"
+    if applied_hhv is None:
+        applied_hhv = 4500.0
 
     # 스냅샷 저장 폴더 기본값: 결과 엑셀과 같은 폴더
     if not snap_out or use_default_snapshot_dir:
@@ -1018,37 +1103,50 @@ def run(root: str = None,
     sheets["SMP(연도별)"] = build_smp_yearly(root, ys, ye, id_to_name)
 
 
-    # --- 연료사용량(Mcal) 변환: 값 열만 ×1000 ---
-    fuel_df = sheets.get("연료사용량")
-    if fuel_df is not None and not fuel_df.empty:
+    # --- 시간별/연도별 모드 처리 ---
+    if result_mode == "시간별":
+        # 전체 시간 인덱스(공란 패딩용)
+        full_idx = build_full_hourly_index(ys, ye)
         key_cols = ["연도","월","일","요일","시간"]
-        val_cols = [c for c in fuel_df.columns if c not in key_cols]
-        # 숫자형 강제 변환 후 ×1000
-        for c in val_cols:
-            fuel_df[c] = pd.to_numeric(fuel_df[c], errors="coerce") * 1000.0
-        sheets["연료사용량"] = fuel_df  # 갱신
 
-    # --- 전체 시간 인덱스(공란 패딩용) ---
-    full_idx = build_full_hourly_index(ys, ye)
-    key_cols = ["연도","월","일","요일","시간"]
+        # 시간 축을 가지는 시트들 (연도 요약 시트 제외)
+        hourly_sheets = [
+            "입찰량","발전량","송전량","이용률","연료사용량",
+            "정산금","SMP(시간별)","예비력용량가치정산금","발전비용"
+        ]
 
-    # 시간 축을 가지는 시트들 (연도 요약 시트 제외)
-    hourly_sheets = [
-        "입찰량","발전량","송전량","이용률","연료사용량",
-        "정산금","SMP(시간별)","예비력용량가치정산금","발전비용"
-    ]
+        for name in hourly_sheets:
+            df = sheets.get(name)
+            if df is None or df.empty:
+                sheets[name] = full_idx.copy()
+                continue
+            sheets[name] = full_idx.merge(df, on=key_cols, how="left")
+    else:
+        yearly_targets = [
+            "입찰량","발전량","송전량","연료사용량","발전비용",
+            "이용률","정산금","예비력용량가치정산금"
+        ]
+        for name in yearly_targets:
+            sheets[name] = aggregate_to_yearly(sheets.get(name), name)
+        # 연도별 결과에서는 SMP(시간별) 제외
+        if "SMP(시간별)" in sheets:
+            del sheets["SMP(시간별)"]
 
-    for name in hourly_sheets:
-        df = sheets.get(name)
-        if df is None or df.empty:
-            # 비어 있더라도 전체 인덱스만큼 공란으로 만들어 줌
-            sheets[name] = full_idx.copy()
-            continue
+    # --- 연료사용량: [Mcal] + 공백열 + [ton] 2개 표로 변환 ---
+    sheets["연료사용량"] = build_fuel_sheet_with_ton(sheets.get("연료사용량"), applied_hhv)
 
-        # 키 기준 외부조인으로 누락 시간대를 공란(NaN)으로 채움
-        padded = full_idx.merge(df, on=key_cols, how="left")
-        sheets[name] = padded
-
+    # 단위 문자열
+    unit_map = {
+        "입찰량": "[MWh]",
+        "발전량": "[MWh]",
+        "송전량": "[MWh]",
+        "발전비용": "[천 원]",
+        "정산금": "[천 원]",
+        "예비력용량가치정산금": "[천 원]",
+        "이용률": "[%]",
+        "SMP(시간별)": "[원/kWh]",
+        "SMP(연도별)": "[원/kWh]",
+    }
 
     # ---------------- 엑셀 저장 ----------------
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as xw:
@@ -1057,10 +1155,12 @@ def run(root: str = None,
             # 공통 포맷
             wb  = xw.book
             fmt_head = wb.add_format({"align":"center","valign":"vcenter","bold":True,"border":1,"bg_color":"#EEEEEE"})
-            fmt_int  = wb.add_format({"align":"center","valign":"vcenter","border":1,"num_format":"0"})
+            fmt_key  = wb.add_format({"align":"center","valign":"vcenter","border":1,"num_format":"0"})
+            fmt_int  = wb.add_format({"align":"center","valign":"vcenter","border":1,"num_format":"#,##0"})
             fmt_num  = wb.add_format({"align":"center","valign":"vcenter","border":1,"num_format":"#,##0.00"})
             fmt_txt  = wb.add_format({"align":"center","valign":"vcenter","border":1})
             fmt_center_noborder = wb.add_format({"align":"center","valign":"vcenter"})  # 중앙정렬(테두리X)
+            fmt_unit = wb.add_format({"align":"right","valign":"vcenter","bold":True})
 
             # =========================================
             # 1) SMP(연도별) : 병합 헤더 + 데이터 포맷(연도=정수, 나머지=두째자리)
@@ -1073,17 +1173,20 @@ def run(root: str = None,
                 if num_cols_names:
                     base_df[num_cols_names] = base_df[num_cols_names].apply(pd.to_numeric, errors="coerce")
 
-                startrow = 2
+                startrow = 3
                 base_df.to_excel(xw, index=False, sheet_name=name, startrow=startrow, header=False)
                 ws = xw.sheets[name]
 
+                # 단위 표기(1행)
+                ws.write(0, max(base_df.shape[1]-1, 0), unit_map.get(name, ""), fmt_unit)
+
                 # 병합 헤더
-                ws.merge_range(0, 0, 1, 0, "연도", fmt_head)
+                ws.merge_range(1, 0, 2, 0, "연도", fmt_head)
                 groups = [("경인", 1), ("비경인", 7), ("제주", 13)]
                 for title, c0 in groups:
-                    ws.merge_range(0, c0, 0, c0+5, title, fmt_head)
+                    ws.merge_range(1, c0, 1, c0+5, title, fmt_head)
                     for i, s in enumerate(["최대값","자원명","최소값","자원명","평균값","가중평균값"]):
-                        ws.write(1, c0+i, s, fmt_head)
+                        ws.write(2, c0+i, s, fmt_head)
 
                 nrows, ncols = base_df.shape
 
@@ -1117,14 +1220,17 @@ def run(root: str = None,
             # =========================================
             if name == "정산금":
                 base_df = (pd.DataFrame() if df is None else df).copy()
-                startrow = 2  # 데이터는 3행부터 쓴다
+                startrow = 3  # 데이터는 4행부터 쓴다
                 base_df.to_excel(xw, index=False, sheet_name=name, startrow=startrow, header=False)
                 ws = xw.sheets[name]
 
+                # 단위 표기(1행)
+                ws.write(0, max(base_df.shape[1]-1, 0), unit_map.get(name, ""), fmt_unit)
+
                 # 키 5열(연/월/일/요일/시간) 세로 병합 헤더
-                key_cols = ["연도","월","일","요일","시간"]
+                key_cols = [c for c in ["연도","월","일","요일","시간"] if c in base_df.columns]
                 for i, lab in enumerate(key_cols):
-                    ws.merge_range(0, i, 1, i, lab, fmt_head)
+                    ws.merge_range(1, i, 2, i, lab, fmt_head)
 
                 nrows, ncols = base_df.shape
                 ws.set_column(0, max(ncols-1, 0), 14, fmt_center_noborder)  # 전열 중앙정렬
@@ -1157,17 +1263,19 @@ def run(root: str = None,
                 cur_col = len(key_cols)  # ★ 항상 키 다음 칼럼(=5)에서 시작
                 for nm in names_order:
                     # 4개 폭
-                    ws.merge_range(0, cur_col, 0, cur_col+3, nm, fmt_head)
-                    ws.write(1, cur_col+0, "MEP", fmt_head)
-                    ws.write(1, cur_col+1, "MAP", fmt_head)
-                    ws.write(1, cur_col+2, "MWP", fmt_head)
-                    ws.write(1, cur_col+3, "합계", fmt_head)
+                    ws.merge_range(1, cur_col, 1, cur_col+3, nm, fmt_head)
+                    ws.write(2, cur_col+0, "MEP", fmt_head)
+                    ws.write(2, cur_col+1, "MAP", fmt_head)
+                    ws.write(2, cur_col+2, "MWP", fmt_head)
+                    ws.write(2, cur_col+3, "합계", fmt_head)
                     cur_col += 4
 
                 # 본문 포맷: 키 5열 정수, 나머지 수치 #,##0.00
                 if nrows > 0 and ncols > 0:
                     r1, r2 = startrow, startrow + nrows - 1
-                    ws.conditional_format(r1, 0, r2, min(4, ncols-1), {"type":"no_blanks","format":fmt_int})
+                    key_last = min(len(key_cols)-1, ncols-1)
+                    if key_last >= 0:
+                        ws.conditional_format(r1, 0, r2, key_last, {"type":"no_blanks","format":fmt_key})
                     if ncols > len(key_cols):
                         ws.conditional_format(r1, len(key_cols), r2, ncols-1, {"type":"no_blanks","format":fmt_num})
 
@@ -1189,7 +1297,7 @@ def run(root: str = None,
 
                 # --- 1) 컬럼 파싱으로 자원명/지표 매핑 만들기 ---
                 import re
-                key_cols = ["연도","월","일","요일","시간"]
+                key_cols = [c for c in ["연도","월","일","요일","시간"] if c in base_df.columns]
                 data_cols = [c for c in base_df.columns if c not in key_cols]
 
                 metrics = ["발전비용","기동비용","연료비용"]
@@ -1222,41 +1330,107 @@ def run(root: str = None,
                 base_df = base_df[ordered_cols]
 
                 # --- 3) 엑셀 쓰기 ---
-                startrow = 2
+                startrow = 3
                 base_df.to_excel(xw, index=False, sheet_name=name, startrow=startrow, header=False)
                 ws = xw.sheets[name]
 
-                # 1,2행 키 5열 세로 병합
+                # 단위 표기(1행)
+                ws.write(0, max(base_df.shape[1]-1, 0), unit_map.get(name, ""), fmt_unit)
+
+                # 2,3행 키 5열 세로 병합
                 for i, lab in enumerate(key_cols):
-                    ws.merge_range(0, i, 1, i, lab, fmt_head)
+                    ws.merge_range(1, i, 2, i, lab, fmt_head)
 
                 # 1행: 대분류(발전/기동/연료) 병합, 2행: 자원명
                 col0 = len(key_cols)  # ★ 항상 5에서 시작
                 width = len(names_order)
                 for mt in metrics:
                     if width <= 1:
-                        ws.write(0, col0, mt, fmt_head)
+                        ws.write(1, col0, mt, fmt_head)
                     else:
-                        ws.merge_range(0, col0, 0, col0 + width - 1, mt, fmt_head)
+                        ws.merge_range(1, col0, 1, col0 + width - 1, mt, fmt_head)
                     for j, nm in enumerate(names_order):
-                        ws.write(1, col0 + j, nm, fmt_head)
+                        ws.write(2, col0 + j, nm, fmt_head)
                     col0 += max(width, 1)
 
                 # 본문 포맷 (정렬·서식)
                 nrows, ncols = base_df.shape
                 ws.set_column(0, ncols-1, 14, fmt_center_noborder)
-                if nrows > 0:
+                if nrows > 0 and ncols > 0:
                     r1, r2 = startrow, startrow + nrows - 1
-                    # 키 5열 정수
-                    ws.conditional_format(r1, 0, r2, 4, {"type":"no_blanks","format":fmt_int})
+                    key_last = len(key_cols) - 1
+                    # 키 열 정수
+                    if key_last >= 0:
+                        ws.conditional_format(r1, 0, r2, key_last, {"type":"no_blanks","format":fmt_key})
                     # 값들 #,##0.00
                     if ncols > len(key_cols):
                         ws.conditional_format(r1, len(key_cols), r2, ncols-1, {"type":"no_blanks","format":fmt_num})
 
                 # 키 열 폭 통일
-                ws.set_column(0, 4, 8, fmt_center_noborder)
-                if ncols > len(key_cols):
-                    ws.set_column(len(key_cols), ncols-1, 14, fmt_center_noborder)
+                if ncols > 0:
+                    key_last = min(len(key_cols)-1, ncols-1)
+                    if key_last >= 0:
+                        ws.set_column(0, key_last, 8, fmt_center_noborder)
+                    if ncols > len(key_cols):
+                        ws.set_column(len(key_cols), ncols-1, 14, fmt_center_noborder)
+                continue
+
+
+            # =========================================
+            # 4) 연료사용량 : [Mcal] + 공백열 + [ton], 단위 2개 표기
+            # =========================================
+            if name == "연료사용량":
+                base_df = (pd.DataFrame() if df is None else df).copy()
+                base_df.to_excel(xw, index=False, sheet_name=name, startrow=1, header=False)
+                ws = xw.sheets[name]
+
+                nrows, ncols = base_df.shape
+                split_col = list(base_df.columns).index("") if "" in base_df.columns else -1
+
+                # 헤더(2행)
+                for c, col in enumerate(base_df.columns):
+                    if split_col >= 0 and c == split_col:
+                        ws.write(1, c, "", fmt_center_noborder)
+                    else:
+                        ws.write(1, c, col, fmt_head)
+
+                # 단위(1행) - 첫 표, 둘째 표 각각 마지막 컬럼
+                if split_col > 0:
+                    ws.write(0, split_col - 1, "[Mcal]", fmt_unit)
+                    ws.write(0, ncols - 1, "[ton]", fmt_unit)
+                elif ncols > 0:
+                    ws.write(0, ncols - 1, "[Mcal]", fmt_unit)
+
+                # 열 폭
+                if ncols > 0:
+                    ws.set_column(0, ncols-1, 14, fmt_center_noborder)
+                    ws.set_column(0, min(4, ncols-1), 8, fmt_center_noborder)
+                    if split_col >= 0:
+                        ws.set_column(split_col, split_col, 3, fmt_center_noborder)
+
+                # 본문 포맷
+                if nrows > 0 and ncols > 0:
+                    r1, r2 = 2, nrows + 1
+                    key_cols_left = [c for c in ["연도","월","일","요일","시간"] if c in base_df.columns[: (split_col if split_col >= 0 else ncols)]]
+                    key_len = len(key_cols_left)
+                    if split_col >= 0:
+                        left_key_last = min(key_len - 1, split_col - 1)
+                        if left_key_last >= 0:
+                            ws.conditional_format(r1, 0, r2, left_key_last, {"type":"no_blanks","format":fmt_key})
+                        if split_col - 1 >= key_len:
+                            ws.conditional_format(r1, key_len, r2, split_col - 1, {"type":"no_blanks","format":fmt_num})
+
+                        right_start = split_col + 1
+                        right_key_last = right_start + key_len - 1
+                        right_val_start = right_key_last + 1
+                        if right_val_start <= ncols - 1:
+                            ws.conditional_format(r1, right_val_start, r2, ncols-1, {"type":"no_blanks","format":fmt_num})
+                    else:
+                        key_last = min(key_len - 1, ncols - 1)
+                        if key_last >= 0:
+                            ws.conditional_format(r1, 0, r2, key_last, {"type":"no_blanks","format":fmt_key})
+                        if ncols - 1 >= key_len:
+                            ws.conditional_format(r1, key_len, r2, ncols-1, {"type":"no_blanks","format":fmt_num})
                 continue
 
 
@@ -1264,12 +1438,16 @@ def run(root: str = None,
             # 4) 일반 시트 : 헤더 1행만, 데이터 포맷(정수/소수 분리) + 중앙정렬 기본
             # =========================================
             df = pd.DataFrame() if df is None else df
-            df.to_excel(xw, index=False, sheet_name=name)  # 헤더 포함
+            df.to_excel(xw, index=False, sheet_name=name, startrow=1)  # 헤더는 2행
             ws = xw.sheets[name]
 
-            # 헤더(정확 범위만 회색)
+            # 단위(1행, 마지막 컬럼 우측정렬)
+            if df.shape[1] > 0:
+                ws.write(0, df.shape[1]-1, unit_map.get(name, ""), fmt_unit)
+
+            # 헤더(2행, 정확 범위만 회색)
             for c, col in enumerate(df.columns):
-                ws.write(0, c, col, fmt_head)
+                ws.write(1, c, col, fmt_head)
 
             nrows, ncols = df.shape
 
@@ -1278,25 +1456,31 @@ def run(root: str = None,
                 ws.set_column(0, ncols-1, 14, fmt_center_noborder)
 
             if nrows > 0 and ncols > 0:
-                r1, r2 = 1, nrows  # 데이터 구간
-                last_key = min(4, ncols-1)
-                # 키 5열: 정수
-                ws.conditional_format(r1, 0, r2, last_key, {"type":"no_blanks","format":fmt_int})
+                r1, r2 = 2, nrows + 1  # 데이터 구간
+                key_cols = [c for c in ["연도","월","일","요일","시간"] if c in df.columns]
+                key_len = len(key_cols)
+                last_key = min(key_len - 1, ncols-1)
+                # 키 열: 정수
+                if last_key >= 0:
+                    ws.conditional_format(r1, 0, r2, last_key, {"type":"no_blanks","format":fmt_key})
                 # 나머지 열: 자원명(텍스트) vs 값(두째자리)
-                if ncols > 5:
-                    for i in range(5, ncols):
-                        colname = df.columns[i]
-                        if "자원명" in colname:
-                            ws.conditional_format(r1, i, r2, i, {"type":"no_blanks","format":fmt_txt})
-                        else:
-                            ws.conditional_format(r1, i, r2, i, {"type":"no_blanks","format":fmt_num})
+                for i in range(key_len, ncols):
+                    colname = df.columns[i]
+                    if "자원명" in colname:
+                        ws.conditional_format(r1, i, r2, i, {"type":"no_blanks","format":fmt_txt})
+                    else:
+                        ws.conditional_format(r1, i, r2, i, {"type":"no_blanks","format":fmt_num})
 
-            # 열 폭: 0~4 동일(8), 이후 14
+            # 열 폭: 키 열 8, 이후 14
             try:
                 if ncols > 0:
-                    ws.set_column(0, min(4, ncols-1), 8, fmt_center_noborder)
-                    if ncols > 5:
-                        ws.set_column(5, ncols-1, 14, fmt_center_noborder)
+                    key_cols = [c for c in ["연도","월","일","요일","시간"] if c in df.columns]
+                    key_len = len(key_cols)
+                    key_last = min(key_len-1, ncols-1)
+                    if key_last >= 0:
+                        ws.set_column(0, key_last, 8, fmt_center_noborder)
+                    if ncols > key_len:
+                        ws.set_column(key_len, ncols-1, 14, fmt_center_noborder)
             except Exception:
                 pass
 
@@ -1305,4 +1489,22 @@ def run(root: str = None,
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        # 인자 없이 실행(특히 --noconsole EXE 더블클릭)하면 GUI를 띄운다.
+        if len(sys.argv) == 1:
+            try:
+                from sudp_gui import main as gui_main
+                gui_main()
+                raise SystemExit(0)
+            except Exception:
+                # GUI 로딩 실패 시 기존 CLI 경로로 폴백
+                pass
+        run()
+    except Exception as e:
+        msg = f"[오류] {e}"
+        try:
+            Path("sudp_error.log").write_text(msg + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        print(msg)
+        raise SystemExit(1)

@@ -1424,7 +1424,7 @@ def run(root: str = None,
             # =========================================
             if name == "연료사용량":
                 base_df = (pd.DataFrame() if df is None else df).copy()
-                base_df.to_excel(xw, index=False, sheet_name=name, startrow=1, header=False)
+                base_df.to_excel(xw, index=False, sheet_name=name, startrow=2, header=False)
                 ws = xw.sheets[name]
 
                 nrows, ncols = base_df.shape

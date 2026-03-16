@@ -1,278 +1,211 @@
-# sudp_gui.py
+from __future__ import annotations
+
 import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
-# ★ 코어 모듈 (sudp_core.py의 run 함수를 사용)
-try:
-    from sudp_core import run as generate_report
-except Exception as e:
-    raise ImportError(
-        "sudp_core.py에서 run 함수를 import하지 못했습니다. "
-        "코어 스크립트를 sudp_core.py로 저장했는지 확인하세요.\n"
-        f"원인: {e}"
-    )
+from sudp_core import DEFAULT_ROOT, run
 
-DEFAULT_ROOT = r"C:\Program Files (x86)\MasterSpace\M-Core\SUDP"
 
-class App(tk.Tk):
-    def __init__(self):
+class SudpApp(tk.Tk):
+    def __init__(self) -> None:
         super().__init__()
         self.title("SUDP 결과 취합")
-        self.geometry("820x620")
-        self.resizable(False, False)
+        self.geometry("960x720")
 
-        # DPI 인식(윈도우에서 글자 또렷하게)
-        try:
-            from ctypes import windll
-            windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
-            pass
-
-        main = ttk.Frame(self, padding=18)
-        main.pack(fill="both", expand=True)
-
-        # ================== 1) 기본 입력 ==================
-        row1 = ttk.Frame(main); row1.pack(fill="x", pady=(0, 10))
-        ttk.Label(row1, text="시작연도", width=10).pack(side="left")
-        self.var_start = tk.StringVar()
-        ttk.Entry(row1, textvariable=self.var_start, width=14).pack(side="left", padx=(5, 22))
-
-        ttk.Label(row1, text="종료연도", width=10).pack(side="left")
-        self.var_end = tk.StringVar()
-        ttk.Entry(row1, textvariable=self.var_end, width=14).pack(side="left", padx=5)
-
-        # 예비력용량가치 단가
-        ttk.Label(row1, text="예비력 단가", width=12).pack(side="left", padx=(24, 0))
-        self.var_ru_price = tk.StringVar()
-        ttk.Entry(row1, textvariable=self.var_ru_price, width=14).pack(side="left", padx=5)
-        ttk.Label(row1, text="(예: 1.0)", foreground="#666").pack(side="left")
-
-        # 자원코드
-        row2 = ttk.Frame(main); row2.pack(fill="x", pady=10)
-        ttk.Label(row2, text="자원코드", width=10).pack(side="left")
+        self.var_start_year = tk.StringVar()
+        self.var_start_month = tk.StringVar()
+        self.var_end_year = tk.StringVar()
+        self.var_end_month = tk.StringVar()
+        self.var_reserve_price = tk.StringVar()
+        self.var_hhv = tk.StringVar()
+        self.var_result_mode = tk.StringVar(value="시간별")
         self.var_codes = tk.StringVar()
-        ttk.Entry(row2, textvariable=self.var_codes).pack(side="left", fill="x", expand=True, padx=5)
-        ttk.Label(row2, text="콤마로 구분 (예: INCC1,INCC2)", foreground="#666").pack(side="left", padx=(10, 0))
-
-        # 저장경로(결과 엑셀)
-        row3 = ttk.Frame(main); row3.pack(fill="x", pady=10)
-        ttk.Label(row3, text="저장경로", width=10).pack(side="left")
         self.var_out = tk.StringVar()
-        ttk.Entry(row3, textvariable=self.var_out).pack(side="left", fill="x", expand=True, padx=5)
-        ttk.Button(row3, text="찾아보기", command=self.choose_out_path).pack(side="left", padx=5)
+        self.var_root = tk.StringVar(value=str(DEFAULT_ROOT))
 
-        # ================== 2) 스냅샷 옵션 ==================
-        box = ttk.Labelframe(main, text="스냅샷 옵션 (SUDP 폴더 백업)")
-        box.pack(fill="x", pady=12)
+        self.var_snapshot = tk.StringVar(value="No")
+        self.var_snapshot_mode = tk.StringVar(value="zip")
+        self.var_snapshot_name = tk.StringVar()
+        self.var_snapshot_dir = tk.StringVar()
+        self.var_snapshot_same_folder = tk.BooleanVar(value=True)
 
-        # 스냅샷 사용 여부
-        row_s1 = ttk.Frame(box); row_s1.pack(fill="x", pady=(6, 6))
-        ttk.Label(row_s1, text="스냅샷", width=10).pack(side="left")
+        self._build_ui()
 
-        self.var_snapshot = tk.StringVar(value="no")   # "yes" / "no"
-        rb_no  = ttk.Radiobutton(row_s1, text="No",  value="no",  variable=self.var_snapshot, command=self._refresh_snapshot_state)
-        rb_yes = ttk.Radiobutton(row_s1, text="Yes", value="yes", variable=self.var_snapshot, command=self._refresh_snapshot_state)
-        rb_no.pack(side="left", padx=2)
-        rb_yes.pack(side="left", padx=12)
+    def _build_ui(self) -> None:
+        pad = {"padx": 8, "pady": 6}
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=12, pady=12)
 
-        # 형식 zip / copy
-        row_s2 = ttk.Frame(box); row_s2.pack(fill="x", pady=(0, 6))
-        ttk.Label(row_s2, text="형식", width=10).pack(side="left")
-        self.var_snap_mode = tk.StringVar(value="zip")
-        self.rb_zip  = ttk.Radiobutton(row_s2, text="zip",  value="zip",  variable=self.var_snap_mode)
-        self.rb_copy = ttk.Radiobutton(row_s2, text="copy", value="copy", variable=self.var_snap_mode)
-        self.rb_zip.pack(side="left", padx=2); self.rb_copy.pack(side="left", padx=12)
+        ttk.Label(top, text="시작연도").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_start_year, width=12).grid(row=0, column=1, sticky="w", **pad)
 
-        # 스냅샷 이름
-        row_s3 = ttk.Frame(box); row_s3.pack(fill="x", pady=(0, 6))
-        ttk.Label(row_s3, text="이름", width=10).pack(side="left")
-        self.var_snap_name = tk.StringVar()
-        self.ent_snap_name = ttk.Entry(row_s3, textvariable=self.var_snap_name)
-        self.ent_snap_name.pack(side="left", fill="x", expand=True, padx=5)
-        ttk.Label(row_s3, text="(빈칸이면 자동 생성)").pack(side="left")
+        ttk.Label(top, text="시작월").grid(row=0, column=2, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_start_month, width=8).grid(row=0, column=3, sticky="w", **pad)
 
-        # 스냅샷 경로 + 기본 경로 체크
-        row_s4 = ttk.Frame(box); row_s4.pack(fill="x", pady=(0, 8))
-        ttk.Label(row_s4, text="저장폴더", width=10).pack(side="left")
-        self.var_snap_dir = tk.StringVar()
-        self.ent_snap_dir = ttk.Entry(row_s4, textvariable=self.var_snap_dir)
-        self.ent_snap_dir.pack(side="left", fill="x", expand=True, padx=5)
-        ttk.Button(row_s4, text="찾아보기", command=self.choose_snap_dir).pack(side="left", padx=5)
+        ttk.Label(top, text="종료연도").grid(row=0, column=4, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_end_year, width=12).grid(row=0, column=5, sticky="w", **pad)
 
-        self.var_snap_use_default = tk.BooleanVar(value=True)
-        self.chk_snap_default = ttk.Checkbutton(
-            row_s4,
+        ttk.Label(top, text="종료월").grid(row=0, column=6, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_end_month, width=8).grid(row=0, column=7, sticky="w", **pad)
+
+        ttk.Label(top, text="예비력 단가").grid(row=1, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_reserve_price, width=12).grid(row=1, column=1, sticky="w", **pad)
+
+        ttk.Label(top, text="적용 발열량(HHV, kcal/kg)").grid(row=1, column=2, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_hhv, width=14).grid(row=1, column=3, sticky="w", **pad)
+
+        ttk.Label(top, text="결과 형식").grid(row=1, column=4, sticky="w", **pad)
+        ttk.Combobox(top, textvariable=self.var_result_mode, values=["시간별", "연도별"], width=10, state="readonly").grid(
+            row=1, column=5, sticky="w", **pad
+        )
+
+        ttk.Label(top, text="자원코드").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_codes, width=55).grid(row=2, column=1, columnspan=7, sticky="we", **pad)
+
+        ttk.Label(top, text="SUDP 루트").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_root, width=80).grid(row=3, column=1, columnspan=6, sticky="we", **pad)
+        ttk.Button(top, text="찾아보기", command=self._choose_root).grid(row=3, column=7, sticky="e", **pad)
+
+        ttk.Label(top, text="저장경로").grid(row=4, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.var_out, width=80).grid(row=4, column=1, columnspan=6, sticky="we", **pad)
+        ttk.Button(top, text="찾아보기", command=self._choose_out).grid(row=4, column=7, sticky="e", **pad)
+
+        snap = ttk.LabelFrame(self, text="스냅샷 옵션 (SUDP 폴더 백업)")
+        snap.pack(fill="x", padx=12, pady=(0, 10))
+
+        ttk.Label(snap, text="스냅샷").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Radiobutton(snap, text="No", variable=self.var_snapshot, value="No", command=self._sync_snapshot_state).grid(row=0, column=1, sticky="w", **pad)
+        ttk.Radiobutton(snap, text="Yes", variable=self.var_snapshot, value="Yes", command=self._sync_snapshot_state).grid(row=0, column=2, sticky="w", **pad)
+
+        ttk.Label(snap, text="형식").grid(row=1, column=0, sticky="w", **pad)
+        self.rb_zip = ttk.Radiobutton(snap, text="zip", variable=self.var_snapshot_mode, value="zip")
+        self.rb_copy = ttk.Radiobutton(snap, text="copy", variable=self.var_snapshot_mode, value="copy")
+        self.rb_zip.grid(row=1, column=1, sticky="w", **pad)
+        self.rb_copy.grid(row=1, column=2, sticky="w", **pad)
+
+        ttk.Label(snap, text="이름").grid(row=2, column=0, sticky="w", **pad)
+        self.ent_snap_name = ttk.Entry(snap, textvariable=self.var_snapshot_name, width=35)
+        self.ent_snap_name.grid(row=2, column=1, columnspan=3, sticky="we", **pad)
+
+        ttk.Label(snap, text="저장폴더").grid(row=3, column=0, sticky="w", **pad)
+        self.ent_snap_dir = ttk.Entry(snap, textvariable=self.var_snapshot_dir, width=55)
+        self.ent_snap_dir.grid(row=3, column=1, columnspan=3, sticky="we", **pad)
+        self.btn_snap_dir = ttk.Button(snap, text="찾아보기", command=self._choose_snapshot_dir)
+        self.btn_snap_dir.grid(row=3, column=4, sticky="e", **pad)
+        self.chk_same_dir = ttk.Checkbutton(
+            snap,
             text="결과 엑셀과 같은 폴더 사용",
-            variable=self.var_snap_use_default,
-            command=self._refresh_snapshot_state
+            variable=self.var_snapshot_same_folder,
+            command=self._sync_snapshot_state,
         )
-        self.chk_snap_default.pack(side="left", padx=(12, 0))
+        self.chk_same_dir.grid(row=3, column=5, sticky="w", **pad)
 
-        # ================== 3) 상태/실행 ==================
-        row4 = ttk.Frame(main); row4.pack(fill="both", expand=True, pady=(10, 0))
-        self.var_status = tk.StringVar(value="준비 완료")
-        ttk.Label(row4, textvariable=self.var_status, foreground="#444").pack(anchor="w")
+        self._sync_snapshot_state()
 
-        self.txt = tk.Text(row4, height=10, state="disabled")
-        self.txt.pack(fill="both", expand=True, pady=(5, 0))
+        log_frame = ttk.Frame(self)
+        log_frame.pack(fill="both", expand=True, padx=12, pady=(4, 10))
+        ttk.Label(log_frame, text="상태").pack(anchor="w")
+        self.txt = tk.Text(log_frame, height=18)
+        self.txt.pack(fill="both", expand=True)
 
-        row5 = ttk.Frame(main); row5.pack(fill="x", pady=15)
-        self.btn_run = ttk.Button(row5, text="실행", command=self.on_run_clicked)
-        self.btn_run.pack(pady=5)
-        self.prog = ttk.Progressbar(row5, mode="indeterminate")
+        btns = ttk.Frame(self)
+        btns.pack(fill="x", padx=12, pady=(0, 12))
+        self.btn_run = ttk.Button(btns, text="실행", command=self._on_run)
+        self.btn_run.pack()
 
-        # 기본값
-        self.var_start.set("")
-        self.var_end.set("")
-        self.var_codes.set("")
-        self.var_out.set("")
-        self.var_ru_price.set("")  # 사용자가 입력
-        self._refresh_snapshot_state()  # 초기 비활성화 상태 반영
-
-    # -------- 유틸 ----------
-    def choose_out_path(self):
-        start = (self.var_start.get() or "start")
-        end = (self.var_end.get() or "end")
-        default_name = f"SUDP_{start}_{end}.xlsx"
-        path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            initialfile=default_name,
-            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
-        )
-        if path:
-            self.var_out.set(path)
-            # 결과 경로 바뀌면 '같은 폴더 사용' 체크 시 스냅샷 폴더도 맞춰줌
-            if self.var_snap_use_default.get():
-                self.var_snap_dir.set(str(Path(path).parent))
-
-    def choose_snap_dir(self):
-        d = filedialog.askdirectory()
+    def _choose_root(self) -> None:
+        d = filedialog.askdirectory(title="SUDP 루트 폴더 선택")
         if d:
-            self.var_snap_dir.set(d)
+            self.var_root.set(d)
 
-    def _refresh_snapshot_state(self):
-        enabled = (self.var_snapshot.get() == "yes")
+    def _choose_out(self) -> None:
+        p = filedialog.asksaveasfilename(
+            title="결과 엑셀 저장 경로",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+        )
+        if p:
+            self.var_out.set(p)
+
+    def _choose_snapshot_dir(self) -> None:
+        d = filedialog.askdirectory(title="스냅샷 저장 폴더 선택")
+        if d:
+            self.var_snapshot_dir.set(d)
+
+    def _sync_snapshot_state(self) -> None:
+        enabled = self.var_snapshot.get() == "Yes"
         state = "normal" if enabled else "disabled"
-        for w in (self.rb_zip, self.rb_copy, self.ent_snap_name, self.ent_snap_dir, self.chk_snap_default):
+        for w in [self.rb_zip, self.rb_copy, self.ent_snap_name, self.chk_same_dir]:
             w.configure(state=state)
 
-        if enabled:
-            # 기본 폴더 사용 체크 시 경로 비활성화 + 자동 지정
-            if self.var_snap_use_default.get():
-                self.ent_snap_dir.configure(state="disabled")
-                out_path = self.var_out.get().strip()
-                if out_path:
-                    self.var_snap_dir.set(str(Path(out_path).parent))
-            else:
-                self.ent_snap_dir.configure(state="normal")
+        same_dir = self.var_snapshot_same_folder.get()
+        self.ent_snap_dir.configure(state=("disabled" if (not enabled or same_dir) else "normal"))
+        self.btn_snap_dir.configure(state=("disabled" if (not enabled or same_dir) else "normal"))
 
-    # -------- 실행 ----------
-    def on_run_clicked(self):
-        # 입력 검증
-        try:
-            start = int(self.var_start.get().strip())
-            end = int(self.var_end.get().strip())
-        except Exception:
-            messagebox.showerror("입력 오류", "시작/종료연도를 숫자로 입력해주세요.")
-            return
+    def _append_log(self, text: str) -> None:
+        self.txt.insert("end", text + "\n")
+        self.txt.see("end")
 
-        codes = self.var_codes.get().strip()
-        if not codes:
-            messagebox.showerror("입력 오류", "자원코드를 콤마로 입력해주세요.")
-            return
-
-        # 예비력 단가
-        ru_text = self.var_ru_price.get().strip()
-        try:
-            reserve_price = float(ru_text)
-        except Exception:
-            messagebox.showerror("입력 오류", "예비력 단가를 숫자로 입력해주세요. (예: 1.0)")
-            return
-
-        out_path = self.var_out.get().strip()
-        if not out_path:
-            s, e = sorted([start, end])
-            out_path = str(Path.cwd() / f"SUDP_{s}_{e}.xlsx")
-            self.var_out.set(out_path)
-
-        # 스냅샷 파라미터 구성
-        snapshot = (self.var_snapshot.get() == "yes")
-        snapshot_mode = self.var_snap_mode.get() if snapshot else None
-        snapshot_name = self.var_snap_name.get().strip() if snapshot else None
-
-        if snapshot:
-            if self.var_snap_use_default.get():
-                snap_dir = str(Path(out_path).parent)
-            else:
-                snap_dir = self.var_snap_dir.get().strip()
-                if not snap_dir:
-                    messagebox.showerror("입력 오류", "스냅샷 폴더를 선택해주세요.")
-                    return
-        else:
-            snap_dir = None
-
-        # 진행 UI
-        self.btn_run.config(state="disabled")
-        self.prog.pack(pady=(5, 0))
-        self.prog.start(12)
-        self.var_status.set("처리 중... 잠시만 기다려주세요.")
-
-        # 로그
-        self._append_log(f"[시작] {start}~{end}, 코드: {codes}\n저장: {out_path}\n")
-        self._append_log(f"예비력 단가: {reserve_price}\n")
-        if snapshot:
-            self._append_log(f"스냅샷: {snapshot_mode}, 이름='{snapshot_name or '(자동)'}', 폴더={snap_dir}\n")
-        else:
-            self._append_log("스냅샷: 사용 안 함\n")
-
-        # 백그라운드 실행
-        t = threading.Thread(
-            target=self._run_job,
-            args=(codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name),
-            daemon=True
-        )
+    def _on_run(self) -> None:
+        self.btn_run.configure(state="disabled")
+        self._append_log("실행 중...")
+        t = threading.Thread(target=self._run_job, daemon=True)
         t.start()
 
-    def _run_job(self, codes, start, end, out_path, reserve_price, snapshot, snapshot_mode, snap_dir, snapshot_name):
+    def _run_job(self) -> None:
         try:
-            # sudp_core.run의 최신 시그니처에 맞춰 호출
-            generate_report(
-                root=DEFAULT_ROOT,
-                codes_csv=codes,
-                start_year=start,
-                end_year=end,
+            start_year = int(self.var_start_year.get().strip())
+            start_month = int((self.var_start_month.get().strip() or "1"))
+            end_year = int(self.var_end_year.get().strip())
+            end_month = int((self.var_end_month.get().strip() or "12"))
+            reserve_price = float(self.var_reserve_price.get().strip() or 0)
+            hhv = float(self.var_hhv.get().strip() or 4500)
+            codes_csv = self.var_codes.get().strip()
+            if not codes_csv:
+                raise ValueError("자원코드를 입력하세요.")
+
+            out_path = self.var_out.get().strip()
+            if not out_path:
+                ys, ye = sorted([start_year, end_year])
+                out_path = str(Path.cwd() / f"SUDP_{ys}_{ye}.xlsx")
+
+            do_snapshot = self.var_snapshot.get() == "Yes"
+            snapshot_out = self.var_snapshot_dir.get().strip() or None
+            use_default_snapshot_dir = self.var_snapshot_same_folder.get()
+
+            run(
+                root=self.var_root.get().strip() or str(DEFAULT_ROOT),
+                codes_csv=codes_csv,
+                start_year=start_year,
+                start_month=start_month,
+                end_year=end_year,
+                end_month=end_month,
                 out_path=out_path,
-                reserve_price=reserve_price,          # ★ 단가 전달
-                snapshot=snapshot,
-                snapshot_mode=(snapshot_mode or "zip"),
-                snapshot_out=snap_dir,
-                snapshot_name=snapshot_name,
+                reserve_price=reserve_price,
+                result_mode=self.var_result_mode.get().strip() or "시간별",
+                applied_hhv=hhv,
+                snapshot=do_snapshot,
+                snapshot_mode=self.var_snapshot_mode.get().strip() or "zip",
+                snapshot_name=self.var_snapshot_name.get().strip() or None,
+                snapshot_out=snapshot_out,
+                use_default_snapshot_dir=use_default_snapshot_dir,
             )
-            self._append_log("[완료] 엑셀 생성 성공\n")
-            self._set_status("완료! 엑셀 파일이 생성되었습니다.")
-            messagebox.showinfo("완료", "엑셀 파일 생성이 완료되었습니다.")
+            self.after(0, lambda: self._append_log(f"완료: {out_path}"))
         except Exception as e:
-            self._append_log("".join(traceback.format_exc()))
-            self._set_status("실패: 오류가 발생했습니다.")
-            messagebox.showerror("오류", f"실행 중 오류가 발생했습니다.\n\n{e}")
+            tb = traceback.format_exc()
+            self.after(0, lambda: self._append_log(f"오류: {e}\n{tb}"))
+            self.after(0, lambda: messagebox.showerror("오류", str(e)))
         finally:
-            self.btn_run.config(state="normal")
-            self.prog.stop()
-            self.prog.pack_forget()
+            self.after(0, lambda: self.btn_run.configure(state="normal"))
 
-    # -------- 공통 ----------
-    def _append_log(self, msg: str):
-        self.txt.config(state="normal")
-        self.txt.insert("end", msg)
-        self.txt.see("end")
-        self.txt.config(state="disabled")
 
-    def _set_status(self, msg: str):
-        self.var_status.set(msg)
+def main() -> None:
+    app = SudpApp()
+    app.mainloop()
+
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    main()
